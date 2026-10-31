@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/PeerDB-io/peerdb/flow/shared"
 )
 
 const testTOCList = `;
@@ -226,7 +228,9 @@ func TestParseTOC(t *testing.T) {
 
 func TestPlanSubsetScope(t *testing.T) {
 	plan := planRestore(testPlanInput(t))
-	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 52, 54, 55, 56, 57}, plan.restore)
+	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 54, 55, 56, 57}, plan.restore)
+	require.Equal(t, []int{52}, plan.fks, "the FK to the unmirrored table is dropped")
+	require.Equal(t, []uint32{200, 201, 208, 209}, plan.created)
 }
 
 func TestPlanIdempotent(t *testing.T) {
@@ -238,6 +242,8 @@ func TestPlanIdempotent(t *testing.T) {
 	in.exists = existing(in, all...)
 	plan := planRestore(in)
 	require.Empty(t, plan.restore)
+	require.Empty(t, plan.fks)
+	require.Empty(t, plan.created)
 }
 
 func TestPlanTableAddition(t *testing.T) {
@@ -245,12 +251,45 @@ func TestPlanTableAddition(t *testing.T) {
 	in.tables = map[uint32]bool{202: true}
 	in.exists = existing(in, 15, 20, 30, 31, 35, 37, 38, 40, 50, 52)
 	plan := planRestore(in)
-	require.Equal(t, []int{33, 34, 39, 51, 53, 56}, plan.restore)
+	require.Equal(t, []int{33, 34, 39, 51, 56}, plan.restore)
+	require.Equal(t, []int{53}, plan.fks, "the FK from an existing table to the added one is added")
 }
 
 func TestPlanWholeDatabase(t *testing.T) {
 	in := testPlanInput(t)
 	in.tables = nil
 	plan := planRestore(in)
-	require.Len(t, plan.restore, 24)
+	require.Len(t, plan.restore, 22)
+	require.Equal(t, []int{52, 53}, plan.fks)
+}
+
+func TestDeferredAddSQL(t *testing.T) {
+	fk := deferredCon{rel: "app.c", name: "c_p_fkey", def: "FOREIGN KEY (p) REFERENCES app.p(id)", valid: true}
+	require.Equal(t, `ALTER TABLE app.c ADD CONSTRAINT "c_p_fkey" FOREIGN KEY (p) REFERENCES app.p(id) NOT VALID`,
+		fk.addSQL(shared.POSTGRES_17))
+	fk.parted = true
+	require.NotContains(t, fk.addSQL(shared.POSTGRES_17), "NOT VALID", "PG17 has no NOT VALID FKs on partitioned tables")
+	require.Contains(t, fk.addSQL(shared.POSTGRES_17+10000), "NOT VALID")
+	chk := deferredCon{rel: "app.c", name: "c_chk", def: "CHECK (app.f(n)) NOT VALID"}
+	require.Equal(t, `ALTER TABLE app.c ADD CONSTRAINT "c_chk" CHECK (app.f(n)) NOT VALID`, chk.addSQL(shared.POSTGRES_17),
+		"not valid on the source stays not valid")
+}
+
+func TestPickDeferred(t *testing.T) {
+	cons := []deferredCon{
+		{name: "fk_in_plan", fk: true, entry: 52},
+		{name: "fk_out_of_scope", fk: true, entry: 53},
+		{name: "chk_missing", addr: objAddr{Type: "table constraint", Names: []string{"app", "c", "chk_missing"}}},
+		{name: "chk_present", addr: objAddr{Type: "table constraint", Names: []string{"app", "c", "chk_present"}}},
+	}
+	exists := map[string]bool{cons[3].addr.key(): true}
+	names := func(cs []deferredCon) []string {
+		n := make([]string, 0, len(cs))
+		for i := range cs {
+			n = append(n, cs[i].name)
+		}
+		return n
+	}
+	plan := schemaPlan{fks: []int{52}}
+	require.Equal(t, []string{"fk_in_plan", "chk_missing"}, names(pickDeferred(plan, cons, exists)))
 }

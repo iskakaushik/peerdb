@@ -96,6 +96,8 @@ type planInput struct {
 
 type schemaPlan struct {
 	restore []int
+	fks     []int
+	created []uint32
 }
 
 func (e tocEntry) is(desc string) bool {
@@ -153,9 +155,14 @@ func planRestore(in planInput) schemaPlan {
 		}
 		switch {
 		case (e.post && !in.post) || (!e.post && !in.pre) || !missing:
+		case e.is("FK CONSTRAINT"):
+			plan.fks = append(plan.fks, e.id)
 		default:
 			picked[e.id] = true
 			plan.restore = append(plan.restore, e.id)
+			if e.table() {
+				plan.created = append(plan.created, e.oid)
+			}
 		}
 	}
 	return plan
