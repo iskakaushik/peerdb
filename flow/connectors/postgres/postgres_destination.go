@@ -222,6 +222,10 @@ func syncRecordsCore[Items model.Items](
 	c.logger.Info(fmt.Sprintf("synced %d records to Postgres table %s via COPY",
 		syncedRecordsCount, rawTableIdentifier))
 
+	if err := c.replayTableSchemaDeltas(ctx, syncRecordsTx, req.Records.SchemaDeltas); err != nil {
+		return nil, fmt.Errorf("failed to sync schema changes: %w", err)
+	}
+
 	// updating metadata with new offset and syncBatchID
 	lastCP := req.Records.GetLastCheckpoint()
 	if err := c.updateSyncMetadata(ctx, req.FlowJobName, lastCP, req.SyncBatchID, syncRecordsTx); err != nil {
@@ -230,10 +234,6 @@ func syncRecordsCore[Items model.Items](
 	// transaction commits
 	if err := syncRecordsTx.Commit(ctx); err != nil {
 		return nil, err
-	}
-
-	if err := c.ReplayTableSchemaDeltas(ctx, req.Env, req.FlowJobName, req.TableMappings, req.Records.SchemaDeltas, nil); err != nil {
-		return nil, fmt.Errorf("failed to sync schema changes: %w", err)
 	}
 
 	return &model.SyncResponse{
@@ -538,6 +538,20 @@ func (c *PostgresConnector) ReplayTableSchemaDeltas(
 	}
 	defer shared.RollbackTx(tableSchemaModifyTx, c.logger)
 
+	if err := c.replayTableSchemaDeltas(ctx, tableSchemaModifyTx, schemaDeltas); err != nil {
+		return err
+	}
+	if err := tableSchemaModifyTx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction for table schema modification: %w", err)
+	}
+	return nil
+}
+
+func (c *PostgresConnector) replayTableSchemaDeltas(
+	ctx context.Context,
+	tableSchemaModifyTx pgx.Tx,
+	schemaDeltas []*protos.TableSchemaDelta,
+) error {
 	for _, schemaDelta := range schemaDeltas {
 		if schemaDelta == nil || len(schemaDelta.AddedColumns) == 0 {
 			continue
@@ -590,10 +604,6 @@ func (c *PostgresConnector) ReplayTableSchemaDeltas(
 				slog.String("dstTableName", schemaDelta.DstTableName),
 			)
 		}
-	}
-
-	if err := tableSchemaModifyTx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction for table schema modification: %w", err)
 	}
 	return nil
 }
