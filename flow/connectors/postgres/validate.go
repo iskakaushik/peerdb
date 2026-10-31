@@ -13,6 +13,7 @@ import (
 
 	"github.com/PeerDB-io/peerdb/flow/connectors/utils"
 	"github.com/PeerDB-io/peerdb/flow/generated/protos"
+	"github.com/PeerDB-io/peerdb/flow/internal"
 	"github.com/PeerDB-io/peerdb/flow/pkg/common"
 	pkg_pg "github.com/PeerDB-io/peerdb/flow/pkg/postgres"
 	"github.com/PeerDB-io/peerdb/flow/shared"
@@ -293,8 +294,12 @@ func (c *PostgresConnector) ValidateMirrorDestination(
 		return nil // no need to validate schema for resync, as we will create or replace the tables
 	}
 
-	if cfg.System == protos.TypeSystem_PG && cfg.Env["PEERDB_PG_AUTOMATED_SCHEMA_DUMP"] == "true" {
-		return nil // pg_dump will create the schema and tables on the destination
+	schemaDump := false
+	if cfg.System == protos.TypeSystem_PG {
+		var err error
+		if schemaDump, err = internal.PeerDBPGAutomatedSchemaDump(ctx, cfg.Env); err != nil {
+			return err
+		}
 	}
 
 	customTypeMapping, err := c.fetchCustomTypeMapping(ctx)
@@ -310,6 +315,10 @@ func (c *PostgresConnector) ValidateMirrorDestination(
 
 		if dstTableIdentifier == "" {
 			return errors.New("destination table identifier is empty")
+		}
+		if schemaDump && !sameTable(srcTableIdentifier, dstTableIdentifier) {
+			return fmt.Errorf("PEERDB_PG_AUTOMATED_SCHEMA_DUMP restores %s under its source name, not as %s",
+				srcTableIdentifier, dstTableIdentifier)
 		}
 
 		// Get the source table schema
@@ -327,7 +336,7 @@ func (c *PostgresConnector) ValidateMirrorDestination(
 				if parseErr != nil {
 					return fmt.Errorf("invalid destination table identifier %s: %w", dstTableIdentifier, parseErr)
 				}
-				if _, alreadyChecked := checkedSchemas[parsedDst.Namespace]; !alreadyChecked {
+				if _, alreadyChecked := checkedSchemas[parsedDst.Namespace]; !alreadyChecked && !schemaDump {
 					if schemaErr := pkg_pg.CheckSchemaExists(ctx, c.conn, parsedDst.Namespace); schemaErr != nil {
 						return schemaErr
 					}
@@ -384,4 +393,10 @@ func (c *PostgresConnector) ValidateMirrorDestination(
 	}
 
 	return nil
+}
+
+func sameTable(a, b string) bool {
+	qa, errA := common.ParseTableIdentifier(a)
+	qb, errB := common.ParseTableIdentifier(b)
+	return errA == nil && errB == nil && qa.String() == qb.String()
 }
