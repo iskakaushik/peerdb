@@ -184,6 +184,7 @@ message TotalRowsSyncedByMirrorResponse {
 message RowCountRequest {
   string flow_job_name = 1;
   repeated string source_tables = 2; // optional filter; if empty, all tables
+  bool checksum = 3;
 }
 
 message TableRowCount {
@@ -193,6 +194,8 @@ message TableRowCount {
   int64 destination_count = 4;  // -1 means timed out
   bool source_is_approximate = 5;
   bool destination_is_approximate = 6;
+  string source_checksum = 7;
+  string destination_checksum = 8;
 }
 
 message RowCountResponse { repeated TableRowCount table_counts = 1; }

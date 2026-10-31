@@ -96,6 +96,17 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 	}
 	defer dstClose(ctx)
 
+	columns := make([]string, len(tableMappings))
+	for i, tm := range tableMappings {
+		if req.Checksum {
+			if err := srcConn.Conn().QueryRow(ctx, `SELECT coalesce(string_agg(quote_ident(attname), ',' ORDER BY attnum), '')
+				FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped AND attgenerated = ''
+				AND attname <> ALL($2)`, tm.SourceTableIdentifier, append([]string{}, tm.Exclude...)).Scan(&columns[i]); err != nil {
+				return nil, NewInternalApiError(fmt.Errorf("failed to get checksum columns of %s: %w", tm.SourceTableIdentifier, err))
+			}
+		}
+	}
+
 	results := make([]*protos.TableRowCount, len(tableMappings))
 	for i, tm := range tableMappings {
 		results[i] = &protos.TableRowCount{
@@ -111,7 +122,7 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
-			count, isApprox, err := getTableRowCount(gCtx, srcConn.Conn(), tm.SourceTableIdentifier)
+			count, isApprox, sum, err := countRows(gCtx, srcConn.Conn(), tm.SourceTableIdentifier, columns[i])
 			if err != nil {
 				slog.WarnContext(gCtx, "failed to get source row count",
 					slog.String("table", tm.SourceTableIdentifier), slog.Any("error", err))
@@ -119,6 +130,7 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 			} else {
 				results[i].SourceCount = count
 				results[i].SourceIsApproximate = isApprox
+				results[i].SourceChecksum = sum
 			}
 		}
 		return nil
@@ -129,7 +141,7 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 			if gCtx.Err() != nil {
 				return gCtx.Err()
 			}
-			count, isApprox, err := getTableRowCount(gCtx, dstConn.Conn(), tm.DestinationTableIdentifier)
+			count, isApprox, sum, err := countRows(gCtx, dstConn.Conn(), tm.DestinationTableIdentifier, columns[i])
 			if err != nil {
 				slog.WarnContext(gCtx, "failed to get destination row count",
 					slog.String("table", tm.DestinationTableIdentifier), slog.Any("error", err))
@@ -137,6 +149,7 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 			} else {
 				results[i].DestinationCount = count
 				results[i].DestinationIsApproximate = isApprox
+				results[i].DestinationChecksum = sum
 			}
 		}
 		return nil
@@ -147,6 +160,22 @@ func (h *FlowRequestHandler) GetMirrorRowCounts(
 	}
 
 	return &protos.RowCountResponse{TableCounts: results}, nil
+}
+
+func countRows(ctx context.Context, conn *pgx.Conn, table string, columns string) (int64, bool, string, error) {
+	if columns == "" {
+		count, isApprox, err := getTableRowCount(ctx, conn, table)
+		return count, isApprox, "", err
+	}
+	parsed, err := common.ParseTableIdentifier(table)
+	if err != nil {
+		return -1, false, "", err
+	}
+	var count int64
+	var sum string
+	err = conn.QueryRow(ctx, fmt.Sprintf("SELECT count(*), coalesce(sum(hashtextextended(row(%s)::text, 0)), 0)::text FROM %s",
+		columns, parsed.String())).Scan(&count, &sum)
+	return count, false, sum, err
 }
 
 // getTableRowCount gets the row count for a table. For tables >= 10GB it returns
