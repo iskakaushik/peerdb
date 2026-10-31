@@ -587,11 +587,13 @@ message CancelTableAdditionOutput {
 
 message ResetMirrorSequencesRequest {
   string flow_job_name = 1;
+  bool finalize_schema = 2;
 }
 
 message ResetMirrorSequencesResponse {
   bool ok = 1;
   string error_message = 2;
+  repeated string notes = 3;
 }
 
 service FlowService {

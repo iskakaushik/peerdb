@@ -50,7 +50,13 @@ func (h *FlowRequestHandler) ResetMirrorSequences(
 	for _, tm := range config.TableMappings {
 		tables = append(tables, tm.SourceTableIdentifier)
 	}
-	if err := connpostgres.SyncSequences(ctx, srcConn, dstConn, tables); err != nil {
+	var notes []string
+	err = connpostgres.SyncSequences(ctx, srcConn, dstConn, tables)
+	if err == nil && req.FinalizeSchema {
+		notes, err = connpostgres.RestoreSchema(ctx, srcConn, dstConn,
+			connpostgres.SchemaStep{Tables: tables, PreData: true, PostData: true, Cutover: true})
+	}
+	if err != nil {
 		slog.ErrorContext(ctx, "failed to reset sequences", slog.Any("error", err))
 		return &protos.ResetMirrorSequencesResponse{
 			Ok:           false,
@@ -59,6 +65,7 @@ func (h *FlowRequestHandler) ResetMirrorSequences(
 	}
 
 	return &protos.ResetMirrorSequencesResponse{
-		Ok: true,
+		Ok:    true,
+		Notes: notes,
 	}, nil
 }

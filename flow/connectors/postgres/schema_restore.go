@@ -25,6 +25,7 @@ type SchemaStep struct {
 	PostData bool
 	Resync   bool
 	DryRun   bool
+	Cutover  bool
 }
 
 func SchemaRestorable(cfg *protos.PostgresConfig) bool {
@@ -46,7 +47,7 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		return nil, err
 	}
 
-	in := planInput{entries: entries, pre: step.PreData, post: step.PostData, resync: step.Resync}
+	in := planInput{entries: entries, pre: step.PreData, post: step.PostData, resync: step.Resync, cutover: step.Cutover}
 	var cons []deferredCon
 	if err := inCatalog(ctx, src.conn, func(tx pgx.Tx) error {
 		if len(step.Tables) > 0 {
@@ -103,6 +104,13 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		return nil, err
 	}
 	notes = append(notes, validateDeferred(ctx, dst.conn, in, cons)...)
+	if step.Cutover {
+		refresh := make([]string, 0, len(plan.matviews))
+		for _, id := range plan.matviews {
+			refresh = append(refresh, "REFRESH MATERIALIZED VIEW "+addrTable(in.info[id].addr).String())
+		}
+		notes = append(notes, execAll(ctx, dst.conn, refresh)...)
+	}
 	return notes, nil
 }
 

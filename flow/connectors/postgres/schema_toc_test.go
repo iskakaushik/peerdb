@@ -272,6 +272,16 @@ func TestPlanResync(t *testing.T) {
 	require.Equal(t, []uint32{200}, plan.created)
 }
 
+func TestPlanHeldAndCutover(t *testing.T) {
+	in := testPlanInput(t)
+	in.exists[objAddr{Type: "role", Names: []string{"app_user"}}.key()] = true
+	in.cutover = true
+	plan := planRestore(in)
+	require.Contains(t, plan.restore, 55)
+	require.Contains(t, plan.restore, 56)
+	require.Empty(t, plan.held)
+}
+
 func TestPlanWholeDatabase(t *testing.T) {
 	in := testPlanInput(t)
 	in.tables = nil

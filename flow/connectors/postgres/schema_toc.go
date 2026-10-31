@@ -96,13 +96,15 @@ type planInput struct {
 	pre     bool
 	post    bool
 	resync  bool
+	cutover bool
 }
 
 type schemaPlan struct {
-	restore []int
-	fks     []int
-	created []uint32
-	held    []int
+	restore  []int
+	fks      []int
+	created  []uint32
+	held     []int
+	matviews []int
 }
 
 func (e tocEntry) is(desc string) bool {
@@ -153,6 +155,9 @@ func planRestore(in planInput) schemaPlan {
 		if e.relation() {
 			scope[e.id] = true
 		}
+		if e.is("MATERIALIZED VIEW") {
+			plan.matviews = append(plan.matviews, e.id)
+		}
 		info, known := in.info[e.id]
 		missing := !in.exists[info.addr.key()] || (in.resync && e.table())
 		if !known {
@@ -160,7 +165,7 @@ func planRestore(in planInput) schemaPlan {
 		}
 		switch {
 		case (e.post && !in.post) || (!e.post && !in.pre) || !missing:
-		case e.class == pgEventTriggerOID:
+		case e.class == pgEventTriggerOID && !in.cutover:
 		case e.class == pgPolicyOID && !allExist(in.exists, info.roles):
 			plan.held = append(plan.held, e.id)
 		case e.is("FK CONSTRAINT"):
