@@ -289,14 +289,14 @@ func (h *FlowRequestHandler) GetSlotLagHistory(
 	ctx context.Context,
 	req *protos.GetSlotLagHistoryRequest,
 ) (*protos.GetSlotLagHistoryResponse, APIError) {
-	rows, err := h.pool.Query(ctx, `select updated_at, slot_size,
+	rows, err := h.pool.Query(ctx, `select * from (select updated_at, slot_size,
 			coalesce(redo_lsn,''), coalesce(restart_lsn,''), coalesce(confirmed_flush_lsn,'')
 		from peerdb_stats.peer_slot_size
 		where slot_size is not null
 			and peer_name = $1
 			and slot_name = $2
 			and updated_at > (now()-$3::INTERVAL)
-		order by random() limit 720`, req.PeerName, req.SlotName, req.TimeSince)
+		order by random() limit 720) s order by updated_at`, req.PeerName, req.SlotName, req.TimeSince)
 	if err != nil {
 		return nil, NewInternalApiError(fmt.Errorf("failed to get slot lag history: %w", err))
 	}
