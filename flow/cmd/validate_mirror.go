@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/PeerDB-io/peerdb/flow/connectors"
+	connpostgres "github.com/PeerDB-io/peerdb/flow/connectors/postgres"
 	"github.com/PeerDB-io/peerdb/flow/connectors/utils/structured"
 	"github.com/PeerDB-io/peerdb/flow/generated/protos"
 	"github.com/PeerDB-io/peerdb/flow/internal"
@@ -182,6 +183,12 @@ func (h *FlowRequestHandler) validateCDCMirrorImpl(
 	if err := dstConn.ValidateMirrorDestination(ctx, connectionConfigs, tableSchemaMap); err != nil {
 		return nil, NewFailedPreconditionApiError(
 			fmt.Errorf("failed to validate destination connector %s: %w", connectionConfigs.DestinationName, err))
+	}
+	pgSrc, srcIsPG := srcConn.(*connpostgres.PostgresConnector)
+	if pgDst, ok := dstConn.(*connpostgres.PostgresConnector); ok && srcIsPG {
+		if err := connpostgres.PreflightSchema(ctx, pgSrc, pgDst, connectionConfigs); err != nil {
+			return nil, NewFailedPreconditionApiError(fmt.Errorf("destination schema preflight failed: %w", err))
+		}
 	}
 
 	return &protos.ValidateCDCMirrorResponse{}, nil

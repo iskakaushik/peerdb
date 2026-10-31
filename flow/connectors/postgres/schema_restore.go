@@ -24,6 +24,7 @@ type SchemaStep struct {
 	PreData  bool
 	PostData bool
 	Resync   bool
+	DryRun   bool
 }
 
 func SchemaRestorable(cfg *protos.PostgresConfig) bool {
@@ -74,11 +75,11 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 	for _, id := range plan.held {
 		notes = append(notes, "policy "+strings.Join(in.info[id].addr.Names, ".")+" held back: its roles are missing")
 	}
-	if step.PreData {
+	if step.PreData && !step.DryRun {
 		notes = append(notes, copyDatabaseSettings(ctx, src.conn, dst.conn, dst.Config.Database)...)
 	}
 	add := pickDeferred(plan, cons, in.exists)
-	prelude, postlude := "", deferredSQL(plan, cons)
+	prelude, postlude := "", deferredSQL(plan, cons, add, version, step.DryRun)
 	if step.Resync {
 		prelude, postlude = resyncSQL(in, postlude)
 	}
@@ -91,11 +92,11 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		if err := os.WriteFile(list, []byte(b.String()), 0o600); err != nil {
 			return nil, err
 		}
-		if err := runRestore(ctx, dst.Config, archive, list, prelude, postlude); err != nil {
+		if err := runRestore(ctx, dst.Config, archive, list, prelude, postlude, step.DryRun); err != nil {
 			return nil, fmt.Errorf("schema restore failed: %w", err)
 		}
 	}
-	if !step.PostData {
+	if !step.PostData || step.DryRun {
 		return notes, nil
 	}
 	if err := addDeferred(ctx, dst.conn, add, version); err != nil {
@@ -174,12 +175,16 @@ func readTOC(ctx context.Context, archive string) ([]tocEntry, error) {
 	return entries, nil
 }
 
-func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, list, prelude, postlude string) error {
+func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, list, prelude, postlude string, dryRun bool) error {
 	addr, err := resolvePgAddr(ctx, config)
 	if err != nil {
 		return fmt.Errorf("destination: %w", err)
 	}
 	psqlArgs := buildPsqlArgs(config, addr.host)
+	if dryRun {
+		psqlArgs = slices.DeleteFunc(psqlArgs, func(a string) bool { return a == "--single-transaction" })
+		prelude, postlude = "BEGIN;\n"+prelude, postlude+"ROLLBACK;\n"
+	}
 	restore := exec.CommandContext(ctx, "pg_restore", "--no-owner", "--no-privileges", "-L", list, "-f", "-", archive)
 	psql := pgCmd(ctx, config, addr, "psql", psqlArgs...)
 	return runPipeline(ctx, restore, psql, "pg_restore", "psql", func(ctx context.Context, r io.Reader, w io.Writer) error {

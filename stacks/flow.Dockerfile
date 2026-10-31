@@ -51,6 +51,10 @@ ENTRYPOINT ["dlv", "--headless", "--continue", "--accept-multiclient", "--listen
 
 FROM flow-base AS flow-api
 
+USER root
+RUN apk add --no-cache postgresql-client
+USER peerdb
+
 ARG PEERDB_VERSION_SHA_SHORT
 ENV PEERDB_VERSION_SHA_SHORT=${PEERDB_VERSION_SHA_SHORT}
 

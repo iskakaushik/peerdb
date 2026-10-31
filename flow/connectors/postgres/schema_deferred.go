@@ -17,11 +17,16 @@ select format('ALTER TABLE %s VALIDATE CONSTRAINT %I', conrelid::regclass, conna
 where not convalidated and conname = any($2::text[]) and (conrelid = any(array(select to_regclass(n)::oid from unnest($1::text[]) n))
   or confrelid = any(array(select to_regclass(n)::oid from unnest($1::text[]) n)))`
 
-func deferredSQL(plan schemaPlan, cons []deferredCon) string {
+func deferredSQL(plan schemaPlan, cons, add []deferredCon, version shared.PGVersion, dryRun bool) string {
 	var b strings.Builder
 	for i := range cons {
 		if c := &cons[i]; !c.fk && slices.Contains(plan.created, c.relOid) {
 			fmt.Fprintf(&b, "ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s;\n", c.rel, common.QuoteIdentifier(c.name))
+		}
+	}
+	if dryRun {
+		for i := range add {
+			fmt.Fprintf(&b, "%s;\n", add[i].addSQL(version))
 		}
 	}
 	return b.String()
