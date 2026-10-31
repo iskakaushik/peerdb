@@ -650,11 +650,11 @@ func (h *FlowRequestHandler) CDCBatches(ctx context.Context, req *protos.GetCDCB
 		if numRows.Valid {
 			batch.NumRows = numRows.Int64
 		}
-		if startLSN.Valid {
-			batch.StartLsn = startLSN.Int.Int64()
+		if lsn, err := startLSN.Int64Value(); err == nil {
+			batch.StartLsn = lsn.Int64
 		}
-		if endLSN.Valid {
-			batch.EndLsn = endLSN.Int.Int64()
+		if lsn, err := endLSN.Int64Value(); err == nil {
+			batch.EndLsn = lsn.Int64
 		}
 
 		return &batch, nil
