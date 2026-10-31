@@ -972,8 +972,9 @@ func (a *FlowableActivity) DropFlowDestination(ctx context.Context, req *protos.
 	ctx = context.WithValue(ctx, shared.FlowNameKey, req.FlowJobName)
 	dstConn, dstClose, err := connectors.GetByNameAs[connectors.CDCSyncConnector](ctx, nil, a.CatalogPool, req.PeerName)
 	if err != nil {
-		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
-			a.Alerter.LogFlowWarning(ctx, req.FlowJobName, fmt.Errorf("[DropFlowDestination] hostname not found, skipping: %w", err))
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); (ok && dnsErr.IsNotFound) ||
+			shared.IsSQLStateError(err, pgerrcode.InvalidCatalogName) {
+			a.Alerter.LogFlowWarning(ctx, req.FlowJobName, fmt.Errorf("[DropFlowDestination] destination is gone, skipping: %w", err))
 			return nil
 		} else {
 			if _, ok := errors.AsType[*exceptions.NotFoundError](err); ok {
