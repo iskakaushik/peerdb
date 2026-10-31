@@ -367,7 +367,7 @@ func SnapshotFlowWorkflow(
 		if _, err := se.setupReplication(sessionCtx); err != nil {
 			return fmt.Errorf("failed to setup replication: %w", err)
 		}
-		return nil
+		return se.restorePostData(ctx)
 	}
 
 	if config.InitialSnapshotOnly && config.DoInitialSnapshot {
@@ -435,5 +435,25 @@ func SnapshotFlowWorkflow(
 		}
 	}
 
-	return nil
+	return se.restorePostData(ctx)
+}
+
+func (s *SnapshotFlowExecution) restorePostData(ctx workflow.Context) error {
+	if s.config.System != protos.TypeSystem_PG || s.config.Resync {
+		return nil
+	}
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		TaskQueue:           internal.PeerFlowTaskQueueName(shared.PeerFlowTaskQueue),
+		StartToCloseTimeout: 7 * 24 * time.Hour,
+		HeartbeatTimeout:    5 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{InitialInterval: time.Minute},
+	})
+	return workflow.ExecuteActivity(ctx, flowable.RunPgDumpSchema, &protos.RunPgDumpSchemaInput{
+		SourceName:      s.config.SourceName,
+		DestinationName: s.config.DestinationName,
+		FlowName:        s.config.FlowJobName,
+		Env:             s.config.Env,
+		TableMappings:   s.config.TableMappings,
+		Section:         protos.PgSchemaSection_PG_SCHEMA_SECTION_POST_DATA,
+	}).Get(ctx, nil)
 }

@@ -232,6 +232,12 @@ func (s PeerFlowE2ETestSuitePG) Test_PG_Schema_Dump_And_CDC() {
 			"SELECT COUNT(*) FROM "+dstChild).Scan(&count)
 		return err == nil && count == 10
 	})
+	e2e.EnvWaitFor(s.t, env, 3*time.Minute, "post-data after the load", func() bool {
+		var count int64
+		err := dstConn.QueryRow(s.t.Context(),
+			"SELECT COUNT(*) FROM pg_constraint WHERE contype = 'f' AND conrelid = $1::regclass", dstChild).Scan(&count)
+		return err == nil && count == 1
+	})
 
 	// --- verify schema objects on destination ---
 

@@ -792,10 +792,17 @@ message GetFlowInfoToCancelFromCatalogOutput {
   peerdb_peers.DBType source_peer_type = 3;
 }
 
+enum PgSchemaSection {
+  PG_SCHEMA_SECTION_ALL = 0;
+  PG_SCHEMA_SECTION_PRE_DATA = 1;
+  PG_SCHEMA_SECTION_POST_DATA = 2;
+}
+
 message RunPgDumpSchemaInput {
   string source_name = 1;
   string destination_name = 2;
   string flow_name = 3;
   map<string, string> env = 4;
   repeated TableMapping table_mappings = 5;
+  PgSchemaSection section = 6;
 }

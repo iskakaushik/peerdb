@@ -264,6 +264,7 @@ func (s *SetupFlowExecution) runPgDumpSchema(
 		FlowName:        config.FlowJobName,
 		Env:             config.Env,
 		TableMappings:   config.TableMappings,
+		Section:         protos.PgSchemaSection_PG_SCHEMA_SECTION_PRE_DATA,
 	}
 
 	var ran bool

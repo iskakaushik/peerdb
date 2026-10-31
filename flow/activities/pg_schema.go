@@ -60,7 +60,9 @@ func (a *FlowableActivity) RunPgDumpSchema(ctx context.Context, input *protos.Ru
 	}
 	return a.withPgSchema(ctx, input.SourceName, input.DestinationName, input.Env, func(src, dst *connpostgres.PostgresConnector) error {
 		return a.restoreSchema(ctx, input.FlowName, src, dst, connpostgres.SchemaStep{
-			Tables: tables,
+			Tables:   tables,
+			PreData:  input.Section != protos.PgSchemaSection_PG_SCHEMA_SECTION_POST_DATA,
+			PostData: input.Section != protos.PgSchemaSection_PG_SCHEMA_SECTION_PRE_DATA,
 		})
 	})
 }

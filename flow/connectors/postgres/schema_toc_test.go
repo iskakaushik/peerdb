@@ -166,9 +166,9 @@ func rel(name string) objAddr { return objAddr{Type: "table", Names: []string{"a
 
 func testPlanInput(t *testing.T) planInput {
 	t.Helper()
-	pre, err := parseTOCList(strings.NewReader(testTOCList))
+	pre, err := parseTOCList(strings.NewReader(testTOCList), false)
 	require.NoError(t, err)
-	post, err := parseTOCList(strings.NewReader(testTOCPost))
+	post, err := parseTOCList(strings.NewReader(testTOCPost), true)
 	require.NoError(t, err)
 	deps, err := parseTOCDeps(strings.NewReader(testTOCVerbose))
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func testPlanInput(t *testing.T) planInput {
 	}
 	return planInput{
 		entries: entries, info: info, exists: map[string]bool{},
-		tables: map[uint32]bool{200: true, 201: true, 208: true, 209: true},
+		tables: map[uint32]bool{200: true, 201: true, 208: true, 209: true}, pre: true, post: true,
 	}
 }
 
@@ -215,7 +215,7 @@ func existing(in planInput, ids ...int) map[string]bool {
 func TestParseTOC(t *testing.T) {
 	in := testPlanInput(t)
 	require.Len(t, in.entries, 24)
-	require.Equal(t, tocEntry{id: 54, class: 0, oid: 201, desc: "ROW SECURITY app c postgres", deps: []int{31}}, in.entries[20])
+	require.Equal(t, tocEntry{id: 54, class: 0, oid: 201, desc: "ROW SECURITY app c postgres", post: true, deps: []int{31}}, in.entries[20])
 	byID := func(id int) tocEntry {
 		return in.entries[slices.IndexFunc(in.entries, func(e tocEntry) bool { return e.id == id })]
 	}

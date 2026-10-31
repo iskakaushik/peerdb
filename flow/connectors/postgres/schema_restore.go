@@ -17,7 +17,9 @@ import (
 )
 
 type SchemaStep struct {
-	Tables []string
+	Tables   []string
+	PreData  bool
+	PostData bool
 }
 
 func SchemaRestorable(cfg *protos.PostgresConfig) bool {
@@ -39,7 +41,7 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		return nil, err
 	}
 
-	in := planInput{entries: entries}
+	in := planInput{entries: entries, pre: step.PreData, post: step.PostData}
 	if err := inCatalog(ctx, src.conn, func(tx pgx.Tx) error {
 		if len(step.Tables) > 0 {
 			if in.tables, err = stepTables(ctx, tx, step.Tables); err != nil {
@@ -85,13 +87,17 @@ func dumpSchema(ctx context.Context, config *protos.PostgresConfig, archive stri
 }
 
 func readTOC(ctx context.Context, archive string) ([]tocEntry, error) {
-	out, err := exec.CommandContext(ctx, "pg_restore", "-l", archive).Output()
-	if err != nil {
-		return nil, fmt.Errorf("pg_restore -l failed: %w", err)
-	}
-	entries, err := parseTOCList(bytes.NewReader(out))
-	if err != nil {
-		return nil, err
+	var entries []tocEntry
+	for _, section := range []string{"--section=pre-data", "--section=post-data"} {
+		out, err := exec.CommandContext(ctx, "pg_restore", "-l", section, archive).Output()
+		if err != nil {
+			return nil, fmt.Errorf("pg_restore -l failed: %w", err)
+		}
+		list, err := parseTOCList(bytes.NewReader(out), section == "--section=post-data")
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, list...)
 	}
 	cmd := exec.CommandContext(ctx, "pg_restore", "-v", "-f", "-", archive)
 	stdout, err := cmd.StdoutPipe()

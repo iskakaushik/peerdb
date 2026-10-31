@@ -19,6 +19,7 @@ type tocEntry struct {
 	id    int
 	class uint32
 	oid   uint32
+	post  bool
 }
 
 var (
@@ -33,7 +34,7 @@ func newTOCScanner(r io.Reader) *bufio.Scanner {
 	return sc
 }
 
-func parseTOCList(r io.Reader) ([]tocEntry, error) {
+func parseTOCList(r io.Reader, post bool) ([]tocEntry, error) {
 	var entries []tocEntry
 	sc := newTOCScanner(r)
 	for sc.Scan() {
@@ -44,7 +45,7 @@ func parseTOCList(r io.Reader) ([]tocEntry, error) {
 		id, _ := strconv.Atoi(m[1])
 		class, _ := strconv.ParseUint(m[2], 10, 32)
 		oid, _ := strconv.ParseUint(m[3], 10, 32)
-		entries = append(entries, tocEntry{id: id, class: uint32(class), oid: uint32(oid), desc: m[4]})
+		entries = append(entries, tocEntry{id: id, class: uint32(class), oid: uint32(oid), desc: m[4], post: post})
 	}
 	return entries, sc.Err()
 }
@@ -89,6 +90,8 @@ type planInput struct {
 	exists  map[string]bool
 	tables  map[uint32]bool
 	entries []tocEntry
+	pre     bool
+	post    bool
 }
 
 type schemaPlan struct {
@@ -149,7 +152,7 @@ func planRestore(in planInput) schemaPlan {
 			missing = slices.ContainsFunc(e.deps, func(d int) bool { return picked[d] })
 		}
 		switch {
-		case !missing:
+		case (e.post && !in.post) || (!e.post && !in.pre) || !missing:
 		default:
 			picked[e.id] = true
 			plan.restore = append(plan.restore, e.id)
