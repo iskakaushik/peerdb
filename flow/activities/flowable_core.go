@@ -91,7 +91,9 @@ func (a *FlowableActivity) applySchemaDeltas(
 			}
 
 			for _, schemaDelta := range schemaDeltas {
-				if schema, exists := schemasCopy[schemaDelta.DstTableName]; exists {
+				if schemaDelta.NewSchema != nil {
+					schemasCopy[schemaDelta.DstTableName] = schemaDelta.NewSchema
+				} else if schema, exists := schemasCopy[schemaDelta.DstTableName]; exists {
 					columnNames := make(map[string]struct{}, len(schema.GetColumns()))
 					for _, col := range schema.GetColumns() {
 						columnNames[col.Name] = struct{}{}
@@ -389,7 +391,7 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 		firstRowReceivedAt, firstRowCommitTime = &receivedAt, &commitTime
 	}
 	if err := monitoring.UpdateNumRowsAndEndLSNForCDCBatch(
-		ctx, a.CatalogPool, flowName, res.CurrentSyncBatchID, uint32(res.NumRecordsSynced), lastCheckpoint,
+		ctx, a.CatalogPool, flowName, syncBatchID, uint32(res.NumRecordsSynced), lastCheckpoint,
 		firstRowReceivedAt, firstRowCommitTime,
 	); err != nil {
 		return nil, a.Alerter.LogFlowError(ctx, flowName, err)
@@ -400,7 +402,7 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 	}
 	if res.TableNameRowsMapping != nil {
 		if err := monitoring.AddCDCBatchTablesForFlow(
-			ctx, a.CatalogPool, flowName, res.CurrentSyncBatchID, res.TableNameRowsMapping, a.OtelManager,
+			ctx, a.CatalogPool, flowName, syncBatchID, res.TableNameRowsMapping, a.OtelManager,
 		); err != nil {
 			return nil, err
 		}

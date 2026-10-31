@@ -42,7 +42,7 @@ const (
 	bool_or(_peerdb_record_type = 2 OR _peerdb_record_type = 1 AND _peerdb_match_data <> '{}'),
 	coalesce(bool_or(_peerdb_data @> '{"cascade":true}') FILTER (WHERE _peerdb_record_type = 3), false),
 	coalesce(bool_or(_peerdb_data @> '{"restart_identity":true}') FILTER (WHERE _peerdb_record_type = 3), false)
-	FROM %s.%s WHERE _peerdb_batch_id = $1 GROUP BY 1`
+	FROM %s.%s WHERE _peerdb_batch_id = $1 AND _peerdb_record_type < 4 GROUP BY 1`
 	keyMovesSQL = `SELECT EXISTS(SELECT FROM %s.%s WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name = $2
 	AND _peerdb_timestamp > $3 AND (_peerdb_record_type = 1 AND (%s) OR _peerdb_record_type = 2 AND (%s)))`
 )

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/PeerDB-io/peerdb/flow/connectors/utils"
 	"github.com/PeerDB-io/peerdb/flow/generated/protos"
@@ -98,6 +99,7 @@ func syncRecordsCore[Items model.Items](
 		lastTimestamp = max(time.Now().UnixNano(), lastTimestamp+1)
 		return lastTimestamp
 	}
+	batchID, schemaChangeAt := req.SyncBatchID, int64(0)
 	tableNameRowsMapping := utils.InitialiseTableRowsMap(req.TableMappings)
 	var pending [][]any
 	streamReadFunc := func() ([]any, error) {
@@ -126,7 +128,7 @@ func syncRecordsCore[Items model.Items](
 					itemsJSON,
 					0,
 					"{}",
-					req.SyncBatchID,
+					batchID,
 					"",
 				}
 
@@ -153,7 +155,7 @@ func syncRecordsCore[Items model.Items](
 					newItemsJSON,
 					1,
 					oldItemsJSON,
-					req.SyncBatchID,
+					batchID,
 					utils.KeysToString(typedRecord.UnchangedToastColumns),
 				}
 
@@ -173,19 +175,32 @@ func syncRecordsCore[Items model.Items](
 					itemsJSON,
 					2,
 					itemsJSON,
-					req.SyncBatchID,
+					batchID,
 					utils.KeysToString(typedRecord.UnchangedToastColumns),
 				}
 
 			case *model.TruncateRecord[Items]:
 				flags := fmt.Sprintf(`{"cascade":%t,"restart_identity":%t}`, typedRecord.Cascade, typedRecord.RestartIdentity)
 				for _, table := range typedRecord.DestinationTableNames {
-					pending = append(pending, []any{uuid.New(), timestamp(), table, flags, 3, "{}", req.SyncBatchID, ""})
+					pending = append(pending, []any{uuid.New(), timestamp(), table, flags, 3, "{}", batchID, ""})
 				}
 				row, pending = pending[0], pending[1:]
 
 			case *model.MessageRecord[Items]:
 				continue
+
+			case *model.RelationRecord[Items]:
+				if numRecords > schemaChangeAt {
+					batchID++
+				}
+				schemaChangeAt = numRecords + 1
+				deltaJSON, err := protojson.Marshal(typedRecord.TableSchemaDelta)
+				if err != nil {
+					return nil, err
+				}
+				row = []any{
+					uuid.New(), timestamp(), schemaChangeTableName, string(deltaJSON), schemaChangeRecordType, "{}", batchID, "",
+				}
 
 			default:
 				return nil, fmt.Errorf("unsupported record type for Postgres flow connector: %T", typedRecord)
@@ -228,7 +243,7 @@ func syncRecordsCore[Items model.Items](
 
 	// updating metadata with new offset and syncBatchID
 	lastCP := req.Records.GetLastCheckpoint()
-	if err := c.updateSyncMetadata(ctx, req.FlowJobName, lastCP, req.SyncBatchID, syncRecordsTx); err != nil {
+	if err := c.updateSyncMetadata(ctx, req.FlowJobName, lastCP, batchID, syncRecordsTx); err != nil {
 		return nil, err
 	}
 	// transaction commits
@@ -239,7 +254,7 @@ func syncRecordsCore[Items model.Items](
 	return &model.SyncResponse{
 		LastSyncedCheckpoint: lastCP,
 		NumRecordsSynced:     numRecords,
-		CurrentSyncBatchID:   req.SyncBatchID,
+		CurrentSyncBatchID:   batchID,
 		TableNameRowsMapping: tableNameRowsMapping,
 		TableSchemaDeltas:    req.Records.SchemaDeltas,
 	}, nil
@@ -291,10 +306,14 @@ func (c *PostgresConnector) NormalizeRecords(
 		return model.NormalizeResponse{}, fmt.Errorf("failed to quiesce destination triggers: %w", err)
 	}
 
+	schemas, schemaChanges, err := c.pendingSchemaChanges(ctx, rawTableIdentifier, normBatchID, req.TableNameSchemaMapping)
+	if err != nil {
+		return model.NormalizeResponse{}, err
+	}
 	normalizeStmtGen := normalizeStmtGenerator{
 		Logger:             c.logger,
 		rawTableName:       rawTableIdentifier,
-		tableSchemaMapping: req.TableNameSchemaMapping,
+		tableSchemaMapping: schemas,
 		peerdbCols: &protos.PeerDBColumns{
 			SoftDeleteColName: req.SoftDeleteColName,
 			SyncedAtColName:   req.SyncedAtColName,
@@ -305,6 +324,9 @@ func (c *PostgresConnector) NormalizeRecords(
 
 	totalRowsAffected := 0
 	for batchID := normBatchID + 1; batchID <= req.SyncBatchID; batchID++ {
+		if err := c.applySchemaChanges(ctx, req, batchID, schemaChanges[batchID], schemas); err != nil {
+			return model.NormalizeResponse{}, err
+		}
 		unchangedToastColumnsMap, err := c.getTableNametoUnchangedCols(ctx, req.FlowJobName, batchID)
 		if err != nil {
 			return model.NormalizeResponse{}, err
@@ -451,6 +473,11 @@ func (c *PostgresConnector) CreateRawTable(ctx context.Context, req *protos.Crea
 		fmt.Sprintf(createRawTableDstTableIndexSQL, rawTableIdentifier, c.metadataSchema, rawTableIdentifier),
 	); err != nil {
 		return nil, fmt.Errorf("error creating destination table index on raw table: %w", err)
+	}
+	if _, err := createRawTableTx.Exec(ctx,
+		fmt.Sprintf(createRawTableSchemaChangeIndexSQL, rawTableIdentifier, c.metadataSchema, rawTableIdentifier),
+	); err != nil {
+		return nil, fmt.Errorf("error creating schema change index on raw table: %w", err)
 	}
 
 	if err := createRawTableTx.Commit(ctx); err != nil {

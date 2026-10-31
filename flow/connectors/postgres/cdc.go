@@ -174,7 +174,7 @@ func (c *PostgresConnector) NewPostgresCDCSource(ctx context.Context, cdcConfig 
 		srcTableIDNameMapping:                    cdcConfig.SrcTableIDNameMapping,
 		schemaNameForRelID:                       schemaNameForRelID,
 		tableNameMapping:                         cdcConfig.TableNameMapping,
-		tableNameSchemaMapping:                   cdcConfig.TableNameSchemaMapping,
+		tableNameSchemaMapping:                   maps.Clone(cdcConfig.TableNameSchemaMapping),
 		relationMessageMapping:                   cdcConfig.RelationMessageMapping,
 		slot:                                     cdcConfig.Slot,
 		publication:                              cdcConfig.Publication,
@@ -1033,7 +1033,12 @@ func PullCdcRecords[Items model.Items](
 
 					case *model.RelationRecord[Items]:
 						tableSchemaDelta := r.TableSchemaDelta
-						if len(tableSchemaDelta.AddedColumns) > 0 {
+						if tableSchemaDelta.NewSchema != nil {
+							records.AddSchemaDelta(req.TableNameMapping, tableSchemaDelta)
+							if err := addRecordWithKey(model.TableWithPkey{}, rec); err != nil {
+								return err
+							}
+						} else if len(tableSchemaDelta.AddedColumns) > 0 {
 							logger.Info(fmt.Sprintf("Detected schema change for table %s, addedColumns: %v",
 								tableSchemaDelta.SrcTableName, tableSchemaDelta.AddedColumns))
 							records.AddSchemaDelta(req.TableNameMapping, tableSchemaDelta)
@@ -1393,6 +1398,16 @@ func processRelationMessage[Items model.Items](
 		p.logger.Error("Detected relation message for table, but not in table schema mapping",
 			slog.String("tableName", currRelDstInfo.Name))
 		return nil, fmt.Errorf("cannot find table schema for %s", currRelDstInfo.Name)
+	}
+
+	if prevSchema.System == protos.TypeSystem_PG {
+		p.relationMessageMapping[currRel.RelationID] = currRel
+		delta, err := p.schemaChange(ctx, currRel, mappedRelID, currRelName, currRelDstInfo, prevSchema)
+		if err != nil || delta == nil {
+			return nil, err
+		}
+		return &model.RelationRecord[Items]{BaseRecord: p.baseRecord(lsn), TableSchemaDelta: delta},
+			monitoring.AuditSchemaDelta(ctx, p.catalogPool.Pool, p.flowJobName, delta)
 	}
 
 	prevRelMap := make(map[string]string, len(prevSchema.Columns))
