@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,6 +235,14 @@ func ParseConfig(connectionString string, pgConfig *protos.PostgresConfig) (*pgx
 	// Reference: https://github.com/jackc/pgx/blob/4e4eaedb47b7b3cfba0a1b0a9e6a3f015764f046/pgconn/config.go#L472-L474
 	connConfig.Config.MaxProtocolVersion = "3.0"
 	connConfig.Config.RuntimeParams["default_transaction_read_only"] = "off"
+	connConfig.Config.RuntimeParams["tcp_keepalives_idle"] = "30"
+	connConfig.Config.RuntimeParams["tcp_keepalives_interval"] = "10"
+	connConfig.Config.RuntimeParams["tcp_keepalives_count"] = "3"
+	connConfig.DialFunc = (&net.Dialer{
+		Timeout:         connConfig.ConnectTimeout,
+		KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3},
+		Control:         tcpUserTimeout,
+	}).DialContext
 
 	shouldUseTls := internal.PGMustUseTlsConnection(pgConfig)
 
