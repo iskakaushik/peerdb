@@ -61,6 +61,18 @@ func (c *PostgresConnector) GetQRepPartitions(
 	if err := c.setTransactionSnapshot(ctx, getPartitionsTx, config.SnapshotName); err != nil {
 		return nil, fmt.Errorf("failed to set transaction snapshot: %w", err)
 	}
+	if config.SnapshotName != "" {
+		var rewritten bool
+		if table, err := common.ParseTableIdentifier(config.WatermarkTable); err != nil {
+			return nil, err
+		} else if relID, err := c.GetRelIDForTable(ctx, table); err != nil {
+			return nil, err
+		} else if err := getPartitionsTx.QueryRow(ctx, rewrittenSQL, relID).Scan(&rewritten, nil, nil); err != nil {
+			return nil, fmt.Errorf("failed to check for a table rewrite: %w", err)
+		} else if rewritten {
+			return []*protos.QRepPartition{{PartitionId: uuid.NewString(), FullTablePartition: true}}, nil
+		}
+	}
 
 	partitions, err := c.getPartitions(ctx, getPartitionsTx, config, last)
 	if err != nil {

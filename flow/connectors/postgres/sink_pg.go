@@ -24,6 +24,7 @@ import (
 type PgCopyShared struct {
 	schemaLatch *concurrency.Latch[[]string]
 	err         error
+	recopy      bool
 }
 
 type PgCopyWriter struct {
@@ -92,8 +93,15 @@ func (p PgCopyWriter) ExecuteQueryWithTx(
 	}
 	if qe.snapshot != "" && len(fieldDescriptions) > 0 && fieldDescriptions[0].TableOID != 0 {
 		var err error
-		if query, cols, err = snapshotColumns(ctx, tx, query, fieldDescriptions); err != nil {
+		if query, cols, p.schema.recopy, err = snapshotColumns(ctx, tx, query, fieldDescriptions); err != nil {
 			return 0, 0, err
+		} else if p.schema.recopy {
+			shared.RollbackTx(tx, qe.logger)
+			if tx, err = qe.conn.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}); err != nil {
+				return 0, 0, err
+			}
+			defer shared.RollbackTx(tx, qe.logger)
+			args = nil
 		}
 	}
 	p.SetSchema(cols)
@@ -143,6 +151,12 @@ func (p PgCopyReader) CopyInto(ctx context.Context, c *PostgresConnector, tx pgx
 	for _, col := range cols {
 		quotedCols = append(quotedCols, common.QuoteIdentifier(col))
 	}
+	if p.schema.recopy {
+		recopy := fmt.Sprintf("LOCK TABLE %[1]s IN SHARE ROW EXCLUSIVE MODE; DELETE FROM %[1]s", table.Sanitize())
+		if _, err := tx.Exec(ctx, recopy); err != nil {
+			return 0, err
+		}
+	}
 	ct, err := tx.Conn().PgConn().CopyFrom(
 		ctx,
 		p.PipeReader,
@@ -151,11 +165,28 @@ func (p PgCopyReader) CopyInto(ctx context.Context, c *PostgresConnector, tx pgx
 	return ct.RowsAffected(), err
 }
 
-func snapshotColumns(ctx context.Context, tx pgx.Tx, query string, fields []pgconn.FieldDescription) (string, []string, error) {
+const rewrittenSQL = `SELECT coalesce(bool_or(c.relfilenode <> pg_relation_filenode(c.oid)), false), $1::oid::regclass::text,
+ NOT EXISTS (SELECT FROM pg_catalog.pg_inherits WHERE inhrelid = $1::oid OR inhparent = $1::oid)
+ FROM pg_catalog.pg_class c WHERE c.oid = $1::oid OR c.oid IN (SELECT relid FROM pg_catalog.pg_partition_tree($1::oid))`
+
+func snapshotColumns(
+	ctx context.Context, tx pgx.Tx, query string, fields []pgconn.FieldDescription,
+) (string, []string, bool, error) {
+	var rewritten, standalone bool
+	var table string
+	if err := tx.QueryRow(ctx, rewrittenSQL, fields[0].TableOID).Scan(
+		&rewritten, &table, &standalone); err != nil {
+		return "", nil, false, err
+	} else if rewritten && !standalone {
+		return "", nil, false, temporal.NewNonRetryableApplicationError("table "+table+" was rewritten during the initial load",
+			exceptions.ApplicationErrorTypeIrrecoverableInvalidSnapshot.String(), nil)
+	} else if !rewritten {
+		table = "(" + query + ") _peerdb_snapshot"
+	}
 	rows, err := tx.Query(ctx, `SELECT attnum, attname FROM pg_catalog.pg_attribute
 		WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped AND attgenerated = ''`, fields[0].TableOID)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	names := make(map[uint16]string)
 	var num uint16
@@ -164,7 +195,7 @@ func snapshotColumns(ctx context.Context, tx pgx.Tx, query string, fields []pgco
 		names[num] = name
 		return nil
 	}); err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	sel, cols := make([]string, 0, len(fields)), make([]string, 0, len(fields))
 	for _, fd := range fields {
@@ -172,5 +203,5 @@ func snapshotColumns(ctx context.Context, tx pgx.Tx, query string, fields []pgco
 			sel, cols = append(sel, common.QuoteIdentifier(fd.Name)+" AS "+common.QuoteIdentifier(name)), append(cols, name)
 		}
 	}
-	return "SELECT " + strings.Join(sel, ",") + " FROM (" + query + ") _peerdb_snapshot", cols, nil
+	return "SELECT " + strings.Join(sel, ",") + " FROM " + table, cols, rewritten, nil
 }
