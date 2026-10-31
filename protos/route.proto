@@ -599,6 +599,19 @@ message ResetMirrorSequencesResponse {
   repeated string notes = 3;
 }
 
+message CutoverMirrorRequest {
+  string flow_job_name = 1;
+  string reverse_flow_job_name = 2;
+  bool prepare_only = 3;
+  bool verify = 4;
+  bool skip_sequences = 5;
+}
+
+message CutoverMirrorResponse {
+  string reverse_flow_job_name = 1;
+  repeated string steps = 2;
+}
+
 service FlowService {
   rpc ValidatePeer(ValidatePeerRequest) returns (ValidatePeerResponse) {
     option (google.api.http) = {
@@ -780,6 +793,12 @@ service FlowService {
     };
   }
 
+  rpc CutoverMirror(CutoverMirrorRequest) returns (CutoverMirrorResponse) {
+    option (google.api.http) = {
+      post : "/v1/mirrors/cutover",
+      body : "*"
+    };
+  }
   rpc FlowStateChange(FlowStateChangeRequest)
       returns (FlowStateChangeResponse) {
     option (google.api.http) = {
