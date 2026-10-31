@@ -196,7 +196,8 @@ func testPlanInput(t *testing.T) planInput {
 		51: {addr: a("index", "app", "u_idx")},
 		52: {addr: a("table constraint", "app", "c", "c_p_fkey")},
 		53: {addr: a("table constraint", "app", "c", "c_u_fkey")},
-		55: {addr: a("policy", "app", "c", "c_own")},
+		54: {addr: a("row security", "app", "c")},
+		55: {addr: a("policy", "app", "c", "c_own"), roles: []objAddr{a("role", "app_user")}},
 		56: {addr: a("event trigger", "evt")},
 		57: {addr: a("trigger", "app", "c", "c_trg")},
 	}
@@ -228,9 +229,10 @@ func TestParseTOC(t *testing.T) {
 
 func TestPlanSubsetScope(t *testing.T) {
 	plan := planRestore(testPlanInput(t))
-	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 54, 55, 56, 57}, plan.restore)
+	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 54, 56, 57}, plan.restore)
 	require.Equal(t, []int{52}, plan.fks, "the FK to the unmirrored table is dropped")
 	require.Equal(t, []uint32{200, 201, 208, 209}, plan.created)
+	require.Equal(t, []int{55}, plan.held)
 }
 
 func TestPlanIdempotent(t *testing.T) {
@@ -240,10 +242,15 @@ func TestPlanIdempotent(t *testing.T) {
 		all = append(all, id)
 	}
 	in.exists = existing(in, all...)
+	in.exists[objAddr{Type: "role", Names: []string{"app_user"}}.key()] = true
 	plan := planRestore(in)
 	require.Empty(t, plan.restore)
 	require.Empty(t, plan.fks)
 	require.Empty(t, plan.created)
+
+	delete(in.exists, in.info[54].addr.key())
+	in.pre = false
+	require.Equal(t, []int{54}, planRestore(in).restore, "RLS is enabled again when only the table exists")
 }
 
 func TestPlanTableAddition(t *testing.T) {
@@ -259,7 +266,7 @@ func TestPlanWholeDatabase(t *testing.T) {
 	in := testPlanInput(t)
 	in.tables = nil
 	plan := planRestore(in)
-	require.Len(t, plan.restore, 22)
+	require.Len(t, plan.restore, 21)
 	require.Equal(t, []int{52, 53}, plan.fks)
 }
 

@@ -307,8 +307,6 @@ func buildPgDumpArgs(config *protos.PostgresConfig, host string, file string) []
 		"--file=" + file,
 		"--no-owner",
 		"--no-privileges",
-		// RLS policies reference roles that may not exist on the destination.
-		"--no-policies",
 		"--no-publications",
 		"--no-subscriptions",
 		"--no-security-labels",

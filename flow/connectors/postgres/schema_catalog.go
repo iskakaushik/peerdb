@@ -13,7 +13,8 @@ import (
 )
 
 const entryInfoSQL = `
-select e.id, a.type, a.object_names, a.object_args
+select e.id, a.type, a.object_names, a.object_args, array(select rolname from pg_policy p
+  join pg_roles r on r.oid = any(p.polroles) where p.oid = e.obj and e.cls = 'pg_policy'::regclass)
 from unnest($1::int[], $2::oid[], $3::oid[]) e(id, cls, obj), pg_identify_object_as_address(e.cls, e.obj, 0) a`
 
 const stepTablesSQL = `
@@ -34,8 +35,8 @@ const existsFnSQL = `
 create or replace function pg_temp.peerdb_exists(t text, n text[], a text[]) returns bool language plpgsql as $f$
 declare o oid;
 begin
-  select objid into o from pg_get_object_address(t, n, a);
-  return coalesce(o, 0) <> 0;
+  select objid into o from pg_get_object_address(case t when 'row security' then 'table' else t end, n, a);
+  return coalesce(o, 0) <> 0 and (t <> 'row security' or (select relrowsecurity from pg_class where oid = o));
 exception when others then return false;
 end $f$`
 
@@ -108,11 +109,21 @@ func loadEntryInfo(ctx context.Context, tx pgx.Tx, entries []tocEntry) (map[int]
 	info := make(map[int]objInfo, len(ids))
 	var id int
 	var a objAddr
-	if _, err := pgx.ForEachRow(rows, []any{&id, &a.Type, &a.Names, &a.Args}, func() error {
-		info[id], a = objInfo{addr: a}, objAddr{}
+	var roles []string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &a.Type, &a.Names, &a.Args, &roles}, func() error {
+		oi := objInfo{addr: a}
+		for _, r := range roles {
+			oi.roles = append(oi.roles, objAddr{Type: "role", Names: []string{r}})
+		}
+		info[id], a = oi, objAddr{}
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("failed to resolve archive entries: %w", err)
+	}
+	for _, e := range entries {
+		if e.is("ROW SECURITY") && len(e.deps) == 1 {
+			info[e.id] = objInfo{addr: objAddr{Type: "row security", Names: info[e.deps[0]].addr.Names}}
+		}
 	}
 	return info, nil
 }
@@ -145,7 +156,7 @@ func loadDeferred(ctx context.Context, tx pgx.Tx, in planInput) ([]deferredCon, 
 func existingOnDestination(ctx context.Context, conn *pgx.Conn, in planInput, cons []deferredCon) (map[string]bool, error) {
 	var addrs []objAddr
 	for _, i := range in.info {
-		addrs = append(addrs, i.addr)
+		addrs = append(append(addrs, i.addr), i.roles...)
 	}
 	for i := range cons {
 		addrs = append(addrs, cons[i].addr)

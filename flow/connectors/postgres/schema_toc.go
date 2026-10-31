@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	pgClassOID = 1259
+	pgClassOID  = 1259
+	pgPolicyOID = 3256
 )
 
 type tocEntry struct {
@@ -82,7 +83,8 @@ func (a objAddr) key() string {
 }
 
 type objInfo struct {
-	addr objAddr
+	roles []objAddr
+	addr  objAddr
 }
 
 type planInput struct {
@@ -98,6 +100,7 @@ type schemaPlan struct {
 	restore []int
 	fks     []int
 	created []uint32
+	held    []int
 }
 
 func (e tocEntry) is(desc string) bool {
@@ -155,6 +158,8 @@ func planRestore(in planInput) schemaPlan {
 		}
 		switch {
 		case (e.post && !in.post) || (!e.post && !in.pre) || !missing:
+		case e.class == pgPolicyOID && !allExist(in.exists, info.roles):
+			plan.held = append(plan.held, e.id)
 		case e.is("FK CONSTRAINT"):
 			plan.fks = append(plan.fks, e.id)
 		default:
@@ -166,4 +171,13 @@ func planRestore(in planInput) schemaPlan {
 		}
 	}
 	return plan
+}
+
+func allExist(exists map[string]bool, addrs []objAddr) bool {
+	for _, a := range addrs {
+		if !exists[a.key()] {
+			return false
+		}
+	}
+	return true
 }

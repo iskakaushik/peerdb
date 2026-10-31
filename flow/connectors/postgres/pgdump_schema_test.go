@@ -295,7 +295,7 @@ func TestBuildPgDumpArgs(t *testing.T) {
 				User:     "admin",
 			},
 			wantArgs: []string{
-				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-policies", "--no-publications",
+				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-publications",
 				"--no-subscriptions", "--no-security-labels", "--no-tablespaces", "--exclude-schema=_peerdb_internal",
 				"-h", "src-host", "-p", "5432", "-d", "mydb", "-U", "admin",
 			},
@@ -308,7 +308,7 @@ func TestBuildPgDumpArgs(t *testing.T) {
 				Database: "test",
 			},
 			wantArgs: []string{
-				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-policies", "--no-publications",
+				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-publications",
 				"--no-subscriptions", "--no-security-labels", "--no-tablespaces", "--exclude-schema=_peerdb_internal",
 				"-h", "localhost", "-p", "5432", "-d", "test",
 			},

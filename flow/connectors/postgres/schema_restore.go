@@ -68,6 +68,9 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 
 	plan := planRestore(in)
 	var notes []string
+	for _, id := range plan.held {
+		notes = append(notes, "policy "+strings.Join(in.info[id].addr.Names, ".")+" held back: its roles are missing")
+	}
 	add := pickDeferred(plan, cons, in.exists)
 	postlude := deferredSQL(plan, cons)
 	if len(plan.restore) > 0 {
