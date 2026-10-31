@@ -366,6 +366,7 @@ func pullCore[Items model.Items](
 		c.logger.Error("error creating cdc source", slog.Any("error", err))
 		return err
 	}
+	cdc.skipOrigin = req.SkipOriginPrefix
 
 	if err := PullCdcRecords(ctx, cdc, req, processor, &c.replLock); err != nil {
 		c.logger.Error("error pulling records", slog.Any("error", err))

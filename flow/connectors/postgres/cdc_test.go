@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 
+	"github.com/PeerDB-io/peerdb/flow/generated/protos"
 	"github.com/PeerDB-io/peerdb/flow/model"
 	"github.com/PeerDB-io/peerdb/flow/otel_metrics"
 	pkg_pg "github.com/PeerDB-io/peerdb/flow/pkg/postgres"
@@ -167,4 +168,40 @@ func TestDefaultExprFromPostgresMissingValue(t *testing.T) {
 			require.Equal(t, tc.want, literal)
 		})
 	}
+}
+
+func TestProcessMessageSkipsChangesFromTheDestination(t *testing.T) {
+	t.Parallel()
+
+	p := newTestCDCSource(t)
+	p.customTypeMapping = map[uint32]pkg_pg.CustomDataType{}
+	p.skipOrigin = "peerdb_7_5_"
+	batch := model.NewCDCStream[model.RecordItems](0)
+	xld := func(data ...byte) pglogrepl.XLogData { return pglogrepl.XLogData{WALStart: 1, WALData: data} }
+	origin := func(name string) pglogrepl.XLogData {
+		return xld(append(append([]byte{'O', 0, 0, 0, 0, 0, 0, 0, 1}, name...), 0)...)
+	}
+
+	for name, skip := range map[string]bool{"peerdb_7_5_rev": true, "peerdb_7_55_rev": false, "peerdb_8_5_x": false, "sub_1": false} {
+		_, err := processMessage(t.Context(), p, batch, origin(name), 1, 0, qProcessor{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, skip, p.skipTx, name)
+	}
+
+	p.skipTx = true
+	rec, err := processMessage(t.Context(), p, batch, xld('I', 0, 0, 0, 1, 'N', 0, 1, 'n'), 1, 0, qProcessor{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, rec)
+
+	p.srcTableIDNameMapping = map[uint32]string{1: "public.t"}
+	p.tableNameMapping = map[string]model.SourceTableMapping{"public.t": {Name: "public.t"}}
+	p.tableNameSchemaMapping = map[string]*protos.TableSchema{"public.t": {System: protos.TypeSystem_PG}}
+	truncate := xld('T', 0, 0, 0, 1, 0, 0, 0, 0, 1)
+	rec, err = processMessage(t.Context(), p, batch, truncate, 1, 0, qProcessor{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, rec)
+	p.skipTx = false
+	rec, err = processMessage(t.Context(), p, batch, truncate, 1, 0, qProcessor{}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
 }

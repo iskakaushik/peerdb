@@ -108,6 +108,7 @@ type PullRecordsRequest[T Items] struct {
 	OverridePublicationName string
 	// override replication slot name
 	OverrideReplicationSlotName string
+	SkipOriginPrefix            string
 	// LastOffset is the latest LSN that was synced.
 	LastOffset CdcCheckpoint
 	// destination capabilities recorded at mirror creation

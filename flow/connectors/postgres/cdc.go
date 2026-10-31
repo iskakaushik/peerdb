@@ -54,6 +54,8 @@ type PostgresCDCSource struct {
 	slot                   string
 	publication            string
 	commitLock             *pglogrepl.BeginMessage
+	skipOrigin             string
+	skipTx                 bool
 
 	// for partitioned tables, maps child relid to parent relid
 	childToParentRelIDMapping map[uint32]uint32
@@ -1135,7 +1137,17 @@ func processMessage[Items model.Items](
 		return nil, err
 	}
 
+	if p.skipTx {
+		switch logicalMsg.(type) {
+		case *pglogrepl.InsertMessage, *pglogrepl.UpdateMessage, *pglogrepl.DeleteMessage, *pglogrepl.TruncateMessage,
+			*pglogrepl.LogicalDecodingMessage:
+			return nil, nil
+		}
+	}
+
 	switch msg := logicalMsg.(type) {
+	case *pglogrepl.OriginMessage:
+		p.skipTx = p.skipOrigin != "" && strings.HasPrefix(msg.Name, p.skipOrigin)
 	case *pglogrepl.BeginMessage:
 		logger.Debug("BeginMessage", slog.Any("FinalLSN", msg.FinalLSN), slog.Uint64("XID", uint64(msg.Xid)))
 		p.otelManager.Metrics.SourceLagGauge.Record(ctx,
@@ -1159,6 +1171,7 @@ func processMessage[Items model.Items](
 		p.otelManager.Metrics.SourceLagGauge.Record(ctx,
 			time.Now().UTC().Add(postgresClockOffset).Sub(msg.CommitTime).Milliseconds())
 		p.commitLock = nil
+		p.skipTx = false
 	case *pglogrepl.RelationMessage:
 		// a child's table and schema mapping is its parent's, but its tuples follow its own column layout,
 		// so the message keeps its own relid and is stored under it

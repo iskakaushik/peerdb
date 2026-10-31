@@ -164,6 +164,7 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 		batchSize = 250_000
 	}
 
+	var skipOrigin string
 	lastOffset, err := func() (model.CdcCheckpoint, error) {
 		// special case pg-pg replication, where offsets are stored on destination instead of catalog
 		if _, isSourcePg := any(srcConn).(*connpostgres.PostgresConnector); isSourcePg {
@@ -175,6 +176,9 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 				// else fallthrough to loading from catalog
 			} else {
 				defer dstPgClose(ctx)
+				if skipOrigin, err = dstPgConn.OriginPrefix(ctx); err != nil {
+					return model.CdcCheckpoint{}, err
+				}
 				return dstPgConn.GetLastOffset(ctx, config.FlowJobName)
 			}
 		}
@@ -251,6 +255,7 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 			TableNameSchemaMapping:      tableNameSchemaMapping,
 			OverridePublicationName:     config.PublicationName,
 			OverrideReplicationSlotName: config.ReplicationSlotName,
+			SkipOriginPrefix:            skipOrigin,
 			RecordStream:                recordBatchPull,
 			Env:                         config.Env,
 			InternalVersion:             config.Version,
