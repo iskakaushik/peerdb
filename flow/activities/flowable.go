@@ -1186,6 +1186,7 @@ type flowInformation struct {
 	config     *protos.FlowConnectionConfigsCore
 	updatedAt  time.Time
 	workflowID string
+	status     protos.FlowStatus
 }
 
 type metricsFlowMetadata struct {
@@ -1498,7 +1499,7 @@ func (a *FlowableActivity) RecordSlotSizes(ctx context.Context) error {
 
 	logger.Info("Querying for flows to emit slot metrics")
 	rows, err := a.CatalogPool.Query(ctx,
-		"SELECT DISTINCT ON (name) name, config_proto, workflow_id, updated_at FROM flows WHERE query_string IS NULL")
+		"SELECT DISTINCT ON (name) name, config_proto, workflow_id, updated_at, status FROM flows WHERE query_string IS NULL")
 	if err != nil {
 		logger.Error("failed to query all flows", slog.Any("error", err))
 		return fmt.Errorf("failed to query all flows for metrics: %w", err)
@@ -1509,7 +1510,8 @@ func (a *FlowableActivity) RecordSlotSizes(ctx context.Context) error {
 		var configProto []byte
 		var workflowID string
 		var updatedAt time.Time
-		if err := rows.Scan(&flowName, &configProto, &workflowID, &updatedAt); err != nil {
+		var status protos.FlowStatus
+		if err := rows.Scan(&flowName, &configProto, &workflowID, &updatedAt, &status); err != nil {
 			return flowInformation{}, err
 		}
 
@@ -1522,6 +1524,7 @@ func (a *FlowableActivity) RecordSlotSizes(ctx context.Context) error {
 			config:     &config,
 			workflowID: workflowID,
 			updatedAt:  updatedAt,
+			status:     status,
 		}, nil
 	})
 	if err != nil {
@@ -1542,6 +1545,7 @@ func (a *FlowableActivity) RecordSlotSizes(ctx context.Context) error {
 			return err
 		}
 		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		a.Alerter.AlertIfFailed(timeoutCtx, info.config.FlowJobName, info.status)
 		if err := a.recordSlotInformation(timeoutCtx, info, slotMetricGauges); err != nil {
 			logger.Error("Failed to record slot information", slog.Any("error", err))
 		}

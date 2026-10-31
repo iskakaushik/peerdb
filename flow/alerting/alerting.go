@@ -224,6 +224,13 @@ func (a *Alerter) AlertIfStalled(ctx context.Context, alertKeys *AlertKeys, appl
 			deploymentUIDPrefix, alertKeys.FlowName, applyLag.Truncate(time.Second), alertKeys.SlotName, slotStall.Truncate(time.Second)))
 }
 
+func (a *Alerter) AlertIfFailed(ctx context.Context, flowName string, status protos.FlowStatus) {
+	if status == protos.FlowStatus_STATUS_FAILED {
+		a.alertMirror(ctx, flowName, "PeerDB mirror failed: "+flowName,
+			fmt.Sprintf("Mirror `%s` is in state FAILED and no longer replicates.", flowName))
+	}
+}
+
 func (a *Alerter) alertMirror(ctx context.Context, flowName string, alertKey string, alertMessage string) {
 	alertSenderConfigs, err := a.registerSendersFromPool(ctx)
 	if err != nil {
