@@ -258,6 +258,17 @@ func (c *PostgresConnector) ValidateMirrorSource(ctx context.Context, cfg *proto
 	if err := c.CheckSourceTables(ctx, sourceTables, cfg.TableMappings, pubName, noCDC); err != nil {
 		return fmt.Errorf("provided source tables invalidated: %w", err)
 	}
+	if !noCDC {
+		names := make([]string, 0, len(cfg.TableMappings))
+		for _, tableMapping := range cfg.TableMappings {
+			names = append(names, tableMapping.SourceTableIdentifier)
+		}
+		if _, err := c.EnsurePullability(ctx, &protos.EnsurePullabilityBatchInput{
+			SourceTableIdentifiers: names, CheckConstraints: true,
+		}); err != nil {
+			return fmt.Errorf("provided source tables invalidated: %w", err)
+		}
+	}
 
 	if pubName == "" && !noCDC {
 		srcTableNames := make([]string, 0, len(sourceTables))
