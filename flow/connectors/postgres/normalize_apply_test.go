@@ -234,3 +234,20 @@ func TestNormalizeThroughput(t *testing.T) {
 		t.Logf("BENCH shape=%s rows=%d normalize_s=%.2f", shape, rows, time.Since(start).Seconds())
 	}
 }
+
+func TestGetSelectedColumnsSkipsGenerated(t *testing.T) {
+	ctx := t.Context()
+	c, err := NewPostgresConnector(ctx, nil, internal.GetCatalogPostgresConfigFromEnv(ctx))
+	require.NoError(t, err)
+	defer c.Close()
+	s := "gen_" + strings.ToLower(common.RandomString(8))
+	_, err = c.conn.Exec(ctx, fmt.Sprintf("create schema %[1]s; create table %[1]s.t(id int primary key, a int, b int generated always as (a * 2) stored)", s))
+	require.NoError(t, err)
+	table := &common.QualifiedTable{Namespace: s, Table: "t"}
+	cols, err := c.GetSelectedColumns(ctx, table, nil, protos.TypeSystem_PG)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "a"}, cols)
+	cols, err = c.GetSelectedColumns(ctx, table, []string{"a"}, protos.TypeSystem_Q)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "b"}, cols)
+}
