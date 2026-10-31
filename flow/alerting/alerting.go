@@ -329,6 +329,12 @@ func (a *Alerter) recordFlowErrorInternal(
 		logger.Error("failed to insert flow error", slog.Any("error", err))
 	}
 
+	if errorType == FlowErrorTypeError && errClass.ErrorAction() != Ignore {
+		mirror := a.mirrorOfFlow(ctx, flowName)
+		a.alertMirror(ctx, mirror, fmt.Sprintf("Error in PeerDB mirror %s: %s", mirror, errClass),
+			fmt.Sprintf("Mirror `%s` failed: %v", mirror, err))
+	}
+
 	// 3. Record error metrics
 	errorAttributes := []attribute.KeyValue{
 		attribute.Stringer(otel_metrics.ErrorClassKey, errClass),
@@ -350,6 +356,15 @@ func (a *Alerter) recordFlowErrorInternal(
 	}
 	counter.Add(ctx, 1, errorAttributeSet)
 	gauge.Record(ctx, 1, errorAttributeSet)
+}
+
+func (a *Alerter) mirrorOfFlow(ctx context.Context, flowName string) string {
+	var mirror string
+	if err := a.CatalogPool.QueryRow(ctx, `SELECT name FROM flows WHERE starts_with($1, 'clone_' || name || '_')
+		ORDER BY length(name) DESC LIMIT 1`, flowName).Scan(&mirror); err != nil {
+		return flowName
+	}
+	return mirror
 }
 
 func (a *Alerter) LogFlowError(ctx context.Context, flowName string, err error) error {
