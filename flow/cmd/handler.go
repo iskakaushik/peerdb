@@ -474,6 +474,19 @@ func (h *FlowRequestHandler) FlowStateChange(
 		for _, tm := range cdcUpdate.AdditionalTables {
 			structured.NormalizeStructuredIngestionTypes(tm.StructuredIngestionConfig, tm.Columns)
 		}
+		if len(cdcUpdate.AdditionalTables) > 0 {
+			config, err := h.getFlowConfigFromCatalog(ctx, req.FlowJobName)
+			if err != nil {
+				return nil, NewInternalApiError(fmt.Errorf("unable to get flow config: %w", err))
+			}
+			if config.System == protos.TypeSystem_PG {
+				config.TableMappings = cdcUpdate.AdditionalTables
+				config.DoInitialSnapshot = !cdcUpdate.SkipInitialSnapshotForTableAdditions
+				if _, apiErr := h.validateCDCMirrorImpl(ctx, pconv.FlowConnectionConfigsToCore(config), true); apiErr != nil {
+					return nil, apiErr
+				}
+			}
+		}
 	}
 
 	if req.FlowConfigUpdate != nil && req.FlowConfigUpdate.GetCdcFlowConfigUpdate() != nil &&
