@@ -162,6 +162,36 @@ func TestNormalizeRecords(t *testing.T) {
 	}
 }
 
+func TestQuiesceReplicaTriggers(t *testing.T) {
+	ctx := t.Context()
+	c, err := NewPostgresConnector(ctx, nil, internal.GetCatalogPostgresConfigFromEnv(ctx))
+	require.NoError(t, err)
+	defer c.Close()
+	s := "quiesce_" + strings.ToLower(common.RandomString(8))
+	_, err = c.conn.Exec(ctx, fmt.Sprintf(`create schema %[1]s;
+		create function %[1]s.f() returns trigger language plpgsql as $$ begin return new; end $$;
+		create function %[1]s.e() returns event_trigger language plpgsql as $$ begin end $$;
+		create table %[1]s.p(id int, v int) partition by range(id); create table %[1]s.p1 partition of %[1]s.p for values from (0) to (10);
+		create trigger ta before insert on %[1]s.p for each row execute function %[1]s.f();
+		create trigger tr before update on %[1]s.p for each row execute function %[1]s.f();
+		create trigger tobase before delete on %[1]s.p for each row execute function %[1]s.f();
+		create rule ra as on insert to %[1]s.p1 do also select 1;
+		alter table %[1]s.p enable always trigger ta; alter table %[1]s.p enable replica trigger tr; alter table %[1]s.p1 enable always rule ra;
+		create event trigger %[1]s_e on ddl_command_end execute function %[1]s.e(); alter event trigger %[1]s_e enable always`, s))
+	require.NoError(t, err)
+	defer func() {
+		_, err := c.conn.Exec(ctx, fmt.Sprintf("drop event trigger %s_e", s))
+		require.NoError(t, err)
+	}()
+	require.NoError(t, c.quiesceReplicaTriggers(ctx, []string{s + ".p"}))
+	var states string
+	require.NoError(t, c.conn.QueryRow(ctx, fmt.Sprintf(`select string_agg(n, ' ' order by n) from (
+		select tgrelid::regclass::text || '.' || tgname || '=' || tgenabled::text n from pg_trigger where tgrelid in ('%[1]s.p'::regclass, '%[1]s.p1'::regclass)
+		union all select rulename || '=' || ev_enabled::text from pg_rewrite where ev_class = '%[1]s.p1'::regclass
+		union all select evtname || '=' || evtenabled::text from pg_event_trigger where evtname = '%[1]s_e') x`, s)).Scan(&states))
+	require.Equal(t, fmt.Sprintf("%[1]s.p.ta=O %[1]s.p.tobase=O %[1]s.p.tr=D %[1]s.p1.ta=O %[1]s.p1.tobase=O %[1]s.p1.tr=D %[1]s_e=O ra=O", s), states)
+}
+
 func TestNormalizeThroughput(t *testing.T) {
 	rows, _ := strconv.Atoi(os.Getenv("PEERDB_APPLY_BENCH_ROWS"))
 	if rows == 0 {

@@ -281,6 +281,16 @@ func (c *PostgresConnector) NormalizeRecords(
 		return model.NormalizeResponse{}, err
 	}
 
+	var pgTables []string
+	for table, schema := range req.TableNameSchemaMapping {
+		if schema.System == protos.TypeSystem_PG {
+			pgTables = append(pgTables, table)
+		}
+	}
+	if err := c.quiesceReplicaTriggers(ctx, pgTables); err != nil {
+		return model.NormalizeResponse{}, fmt.Errorf("failed to quiesce destination triggers: %w", err)
+	}
+
 	normalizeStmtGen := normalizeStmtGenerator{
 		Logger:             c.logger,
 		rawTableName:       rawTableIdentifier,
@@ -531,6 +541,11 @@ func (c *PostgresConnector) ReplayTableSchemaDeltas(
 	for _, schemaDelta := range schemaDeltas {
 		if schemaDelta == nil || len(schemaDelta.AddedColumns) == 0 {
 			continue
+		}
+		if schemaDelta.System == protos.TypeSystem_PG {
+			if _, err := tableSchemaModifyTx.Exec(ctx, setSessionReplicaRoleSQL); err != nil {
+				return err
+			}
 		}
 
 		for _, addedColumn := range schemaDelta.AddedColumns {

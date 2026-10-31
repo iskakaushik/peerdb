@@ -80,6 +80,12 @@ func syncQRepRecords(
 	partitionID := partition.PartitionId
 	startTime := time.Now()
 
+	if config.System == protos.TypeSystem_PG {
+		if err := c.quiesceReplicaTriggers(ctx, []string{config.DestinationTableIdentifier}); err != nil {
+			return 0, nil, fmt.Errorf("failed to quiesce destination triggers: %w", err)
+		}
+	}
+
 	txConfig := c.conn.Config()
 	txConn, err := shared.ConnectPostgres(ctx, txConfig)
 	if err != nil {
@@ -257,6 +263,9 @@ func (c *PostgresConnector) SetupQRepMetadataTables(ctx context.Context, config 
 		syncStartTime TIMESTAMP,
 		syncFinishTime TIMESTAMP DEFAULT NOW()
 	)`, metadataTableIdentifier.Sanitize())
+	if config.System == protos.TypeSystem_PG {
+		createQRepMetadataTableSQL = setSessionReplicaRoleSQL + ";" + createQRepMetadataTableSQL
+	}
 	// execute create table query
 	if _, err := c.execWithLogging(ctx, createQRepMetadataTableSQL); err != nil && !shared.IsSQLStateError(err, pgerrcode.UniqueViolation) {
 		return fmt.Errorf("failed to create table %s: %w", qRepMetadataTableName, err)
