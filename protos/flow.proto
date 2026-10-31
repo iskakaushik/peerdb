@@ -805,4 +805,5 @@ message RunPgDumpSchemaInput {
   map<string, string> env = 4;
   repeated TableMapping table_mappings = 5;
   PgSchemaSection section = 6;
+  bool resync = 7;
 }

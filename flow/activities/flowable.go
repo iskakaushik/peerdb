@@ -1720,6 +1720,11 @@ func (a *FlowableActivity) RenameTables(ctx context.Context, config *protos.Rena
 
 	var renameOutput *protos.RenameTablesOutput
 	ctx = context.WithValue(ctx, shared.FlowNameKey, config.FlowJobName)
+	if ok, err := a.renameTablesWithSchema(ctx, config); err != nil {
+		return nil, a.Alerter.LogFlowError(ctx, config.FlowJobName, fmt.Errorf("failed to rename tables: %w", err))
+	} else if ok {
+		return &protos.RenameTablesOutput{FlowJobName: config.FlowJobName}, nil
+	}
 	renameWithSoftDeleteConn, renameWithSoftDeleteClose, err := connectors.GetByNameAs[connectors.RenameTablesWithSoftDeleteConnector](
 		ctx, nil, a.CatalogPool, config.PeerName)
 	if err != nil {

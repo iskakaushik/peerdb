@@ -16,12 +16,14 @@ import (
 
 	"github.com/PeerDB-io/peerdb/flow/generated/protos"
 	"github.com/PeerDB-io/peerdb/flow/pkg/common"
+	"github.com/PeerDB-io/peerdb/flow/shared"
 )
 
 type SchemaStep struct {
 	Tables   []string
 	PreData  bool
 	PostData bool
+	Resync   bool
 }
 
 func SchemaRestorable(cfg *protos.PostgresConfig) bool {
@@ -43,7 +45,7 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		return nil, err
 	}
 
-	in := planInput{entries: entries, pre: step.PreData, post: step.PostData}
+	in := planInput{entries: entries, pre: step.PreData, post: step.PostData, resync: step.Resync}
 	var cons []deferredCon
 	if err := inCatalog(ctx, src.conn, func(tx pgx.Tx) error {
 		if len(step.Tables) > 0 {
@@ -76,8 +78,11 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		notes = append(notes, copyDatabaseSettings(ctx, src.conn, dst.conn, dst.Config.Database)...)
 	}
 	add := pickDeferred(plan, cons, in.exists)
-	postlude := deferredSQL(plan, cons)
-	if len(plan.restore) > 0 {
+	prelude, postlude := "", deferredSQL(plan, cons)
+	if step.Resync {
+		prelude, postlude = resyncSQL(in, postlude)
+	}
+	if len(plan.restore) > 0 || prelude != "" {
 		list := filepath.Join(dir, "restore.list")
 		var b strings.Builder
 		for _, id := range plan.restore {
@@ -86,7 +91,7 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 		if err := os.WriteFile(list, []byte(b.String()), 0o600); err != nil {
 			return nil, err
 		}
-		if err := runRestore(ctx, dst.Config, archive, list, postlude); err != nil {
+		if err := runRestore(ctx, dst.Config, archive, list, prelude, postlude); err != nil {
 			return nil, fmt.Errorf("schema restore failed: %w", err)
 		}
 	}
@@ -169,7 +174,7 @@ func readTOC(ctx context.Context, archive string) ([]tocEntry, error) {
 	return entries, nil
 }
 
-func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, list, postlude string) error {
+func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, list, prelude, postlude string) error {
 	addr, err := resolvePgAddr(ctx, config)
 	if err != nil {
 		return fmt.Errorf("destination: %w", err)
@@ -178,12 +183,33 @@ func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, lis
 	restore := exec.CommandContext(ctx, "pg_restore", "--no-owner", "--no-privileges", "-L", list, "-f", "-", archive)
 	psql := pgCmd(ctx, config, addr, "psql", psqlArgs...)
 	return runPipeline(ctx, restore, psql, "pg_restore", "psql", func(ctx context.Context, r io.Reader, w io.Writer) error {
+		if _, err := io.WriteString(w, prelude); err != nil {
+			return err
+		}
 		if err := filterIncompatibleLines(ctx, r, w); err != nil {
 			return err
 		}
 		_, err := io.WriteString(w, postlude)
 		return err
 	})
+}
+
+func resyncSQL(in planInput, postlude string) (string, string) {
+	var pre, post strings.Builder
+	post.WriteString(postlude)
+	for i, a := range mappedTables(in) {
+		t := addrTable(a)
+		resync := t.Table + shared.CDCResyncTableSuffix
+		hold := fmt.Sprintf("_peerdb_hold_%d", i)
+		fmt.Fprintf(&pre, "DROP TABLE IF EXISTS %s CASCADE;\n", common.QualifiedTable{Namespace: t.Namespace, Table: resync})
+		fmt.Fprintf(&post, "ALTER TABLE %s RENAME TO %s;\n", t, common.QuoteIdentifier(resync))
+		if in.exists[a.key()] {
+			fmt.Fprintf(&pre, "ALTER TABLE %s RENAME TO %s;\n", t, common.QuoteIdentifier(hold))
+			fmt.Fprintf(&post, "ALTER TABLE %s RENAME TO %s;\n",
+				common.QualifiedTable{Namespace: t.Namespace, Table: hold}, common.QuoteIdentifier(t.Table))
+		}
+	}
+	return pre.String(), post.String()
 }
 
 var sessionGUCs = []string{

@@ -265,6 +265,7 @@ func (s *SetupFlowExecution) runPgDumpSchema(
 		Env:             config.Env,
 		TableMappings:   config.TableMappings,
 		Section:         protos.PgSchemaSection_PG_SCHEMA_SECTION_PRE_DATA,
+		Resync:          config.Resync,
 	}
 
 	var ran bool
@@ -321,9 +322,8 @@ func (s *SetupFlowExecution) executeSetupFlow(
 
 	// pg_dump silently no-ops for SSH tunnel / non-password-auth peers, so we
 	// only skip CreateNormalizedTable when the activity reports it actually ran.
-	// Skip pg_dump for resync (tables get _resync suffix and are swapped).
 	skipCreateTables := false
-	if config.System == protos.TypeSystem_PG && !config.Resync && s.getPGAutomatedSchemaDump(ctx, config.Env) {
+	if config.System == protos.TypeSystem_PG && s.getPGAutomatedSchemaDump(ctx, config.Env) {
 		ran, err := s.runPgDumpSchema(ctx, config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to run pg_dump schema migration: %w", err)

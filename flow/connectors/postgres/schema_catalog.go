@@ -31,6 +31,15 @@ where co.oid = any($1::oid[]) or (co.contype = 'c' and co.conislocal and co.conr
   where d.classid = 'pg_constraint'::regclass and d.objid = co.oid and d.refclassid = 'pg_proc'::regclass
     and p.pronamespace <> 'pg_catalog'::regnamespace))`
 
+const tableDependentsSQL = `
+select 'view ' || r.ev_class::regclass from pg_depend d join pg_rewrite r on r.oid = d.objid
+where d.classid = 'pg_rewrite'::regclass and d.refobjid = to_regclass($1) and r.ev_class <> d.refobjid
+union select 'foreign key ' || conname || ' on ' || conrelid::regclass from pg_constraint
+where contype = 'f' and to_regclass($1) in (conrelid, confrelid)
+union select 'index ' || indexrelid::regclass from pg_index where indrelid = to_regclass($1)
+union select 'trigger ' || tgname from pg_trigger where tgrelid = to_regclass($1) and not tgisinternal
+union select 'comment' from pg_description where classoid = 'pg_class'::regclass and objoid = to_regclass($1) and objsubid = 0`
+
 const existsFnSQL = `
 create or replace function pg_temp.peerdb_exists(t text, n text[], a text[]) returns bool language plpgsql as $f$
 declare o oid;
@@ -61,6 +70,22 @@ func inCatalog(ctx context.Context, conn *pgx.Conn, fn func(pgx.Tx) error) error
 		}
 		return fn(tx)
 	})
+}
+
+func (c *PostgresConnector) TableDependents(ctx context.Context, name string) (deps []string, err error) {
+	table, err := common.ParseTableIdentifier(name)
+	if err != nil {
+		return nil, err
+	}
+	err = inCatalog(ctx, c.conn, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, tableDependentsSQL, table.String())
+		if err != nil {
+			return err
+		}
+		deps, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	return deps, err
 }
 
 func stepTables(ctx context.Context, tx pgx.Tx, tables []string) (map[uint32]bool, error) {

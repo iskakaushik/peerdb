@@ -95,6 +95,7 @@ type planInput struct {
 	entries []tocEntry
 	pre     bool
 	post    bool
+	resync  bool
 }
 
 type schemaPlan struct {
@@ -153,7 +154,7 @@ func planRestore(in planInput) schemaPlan {
 			scope[e.id] = true
 		}
 		info, known := in.info[e.id]
-		missing := !in.exists[info.addr.key()]
+		missing := !in.exists[info.addr.key()] || (in.resync && e.table())
 		if !known {
 			missing = slices.ContainsFunc(e.deps, func(d int) bool { return picked[d] })
 		}

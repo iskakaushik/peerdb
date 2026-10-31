@@ -675,6 +675,27 @@ func (c *PostgresConnector) RenameTables(
 	req *protos.RenameTablesInput,
 	tableNameSchemaMapping map[string]*protos.TableSchema,
 ) (*protos.RenameTablesOutput, error) {
+	return c.renameTables(ctx, req, tableNameSchemaMapping, "")
+}
+
+func (c *PostgresConnector) RenameTablesCascade(
+	ctx context.Context,
+	req *protos.RenameTablesInput,
+	tableNameSchemaMapping map[string]*protos.TableSchema,
+) (*protos.RenameTablesOutput, error) {
+	return c.renameTables(ctx, req, tableNameSchemaMapping, " CASCADE")
+}
+
+const renamePartitionsSQL = `select format('ALTER TABLE %s RENAME TO %I', c.oid::regclass, left(c.relname, -length($2)))
+from pg_partition_tree($1::regclass) t join pg_class c on c.oid = t.relid
+where t.level > 0 and right(c.relname, length($2)) = $2`
+
+func (c *PostgresConnector) renameTables(
+	ctx context.Context,
+	req *protos.RenameTablesInput,
+	tableNameSchemaMapping map[string]*protos.TableSchema,
+	cascade string,
+) (*protos.RenameTablesOutput, error) {
 	renameTablesTx, err := c.conn.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to begin transaction for rename tables: %w", err)
@@ -748,7 +769,7 @@ func (c *PostgresConnector) RenameTables(
 		c.logger.Info(fmt.Sprintf("renaming table '%s' to '%s'...", src, dst))
 
 		// drop the dst table if exists
-		if _, err := c.execWithLoggingTx(ctx, "DROP TABLE IF EXISTS "+dst, renameTablesTx); err != nil {
+		if _, err := c.execWithLoggingTx(ctx, "DROP TABLE IF EXISTS "+dst+cascade, renameTablesTx); err != nil {
 			return nil, fmt.Errorf("unable to drop table %s: %w", dst, err)
 		}
 
@@ -758,6 +779,21 @@ func (c *PostgresConnector) RenameTables(
 			renameTablesTx,
 		); err != nil {
 			return nil, fmt.Errorf("unable to rename table %s to %s: %w", src, dst, err)
+		}
+		if cascade != "" {
+			rows, err := renameTablesTx.Query(ctx, renamePartitionsSQL, dst, shared.CDCResyncTableSuffix)
+			if err != nil {
+				return nil, fmt.Errorf("unable to list partitions of %s: %w", dst, err)
+			}
+			renames, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				return nil, fmt.Errorf("unable to list partitions of %s: %w", dst, err)
+			}
+			for _, rename := range renames {
+				if _, err := c.execWithLoggingTx(ctx, rename, renameTablesTx); err != nil {
+					return nil, fmt.Errorf("unable to rename partition of %s: %w", dst, err)
+				}
+			}
 		}
 
 		c.logger.Info(fmt.Sprintf("successfully renamed table '%s' to '%s'", src, dst))

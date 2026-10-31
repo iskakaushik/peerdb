@@ -262,6 +262,16 @@ func TestPlanTableAddition(t *testing.T) {
 	require.Equal(t, []int{53}, plan.fks, "the FK from an existing table to the added one is added")
 }
 
+func TestPlanResync(t *testing.T) {
+	in := testPlanInput(t)
+	in.tables = map[uint32]bool{200: true}
+	in.exists = existing(in, 15, 20, 30, 31, 35, 37, 38, 40, 50, 52)
+	in.resync, in.post = true, false
+	plan := planRestore(in)
+	require.Equal(t, []int{30}, plan.restore, "only the parked table is restored, its old sequence and default stay")
+	require.Equal(t, []uint32{200}, plan.created)
+}
+
 func TestPlanWholeDatabase(t *testing.T) {
 	in := testPlanInput(t)
 	in.tables = nil
