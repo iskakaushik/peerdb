@@ -853,6 +853,7 @@ func startCDC(
 ) (nextRun, error) {
 	var finished bool
 	var finishedError bool
+	syncStart := workflow.Now(ctx)
 	syncCtx, cancelSync := workflow.WithCancel(workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 365 * 24 * time.Hour,
 		HeartbeatTimeout:    time.Minute,
@@ -873,7 +874,7 @@ func startCDC(
 			}
 
 			now := workflow.Now(ctx)
-			if state.LastError.Add(1 * time.Hour).Before(now) {
+			if state.LastError.Add(1*time.Hour).Before(now) || now.Sub(syncStart) > 5*time.Minute {
 				state.ErrorCount = 0
 			}
 			state.LastError = now
@@ -888,8 +889,7 @@ func startCDC(
 					slog.Any("sleepFor", sleepFor),
 				)
 			} else {
-				// linear backoff from 1 minute up to 10 minutes
-				sleepFor = time.Duration(1+min(state.ErrorCount, 9)) * time.Minute
+				sleepFor = min(15*time.Second<<min(state.ErrorCount, 5), 5*time.Minute)
 				logger.Error("error in sync flow", slog.Any("error", err), slog.Any("sleepFor", sleepFor))
 			}
 			mainLoopSelector.AddFuture(model.SleepFuture(ctx, sleepFor), func(_ workflow.Future) {
