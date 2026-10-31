@@ -93,6 +93,11 @@ func syncRecordsCore[Items model.Items](
 	c.logger.Info(fmt.Sprintf("pushing records to Postgres table %s via COPY", rawTableIdentifier))
 
 	numRecords := int64(0)
+	var lastTimestamp int64
+	timestamp := func() int64 {
+		lastTimestamp = max(time.Now().UnixNano(), lastTimestamp+1)
+		return lastTimestamp
+	}
 	tableNameRowsMapping := utils.InitialiseTableRowsMap(req.TableMappings)
 	streamReadFunc := func() ([]any, error) {
 		for record := range req.Records.GetRecords() {
@@ -109,7 +114,7 @@ func syncRecordsCore[Items model.Items](
 
 				row = []any{
 					uuid.New(),
-					time.Now().UnixNano(),
+					timestamp(),
 					typedRecord.DestinationTableName,
 					itemsJSON,
 					0,
@@ -136,7 +141,7 @@ func syncRecordsCore[Items model.Items](
 
 				row = []any{
 					uuid.New(),
-					time.Now().UnixNano(),
+					timestamp(),
 					typedRecord.DestinationTableName,
 					newItemsJSON,
 					1,
@@ -156,7 +161,7 @@ func syncRecordsCore[Items model.Items](
 
 				row = []any{
 					uuid.New(),
-					time.Now().UnixNano(),
+					timestamp(),
 					typedRecord.DestinationTableName,
 					itemsJSON,
 					2,
