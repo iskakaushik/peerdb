@@ -226,7 +226,7 @@ func (q *QRepPartitionFlowExecution) replicatePartitions(ctx workflow.Context,
 ) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 24 * 5 * time.Hour,
-		HeartbeatTimeout:    5 * time.Minute,
+		HeartbeatTimeout:    time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:        10 * time.Second,
 			BackoffCoefficient:     2.,

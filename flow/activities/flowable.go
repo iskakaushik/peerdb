@@ -726,6 +726,10 @@ func (a *FlowableActivity) ReplicateQRepPartitions(ctx context.Context,
 
 	ctx = context.WithValue(ctx, shared.FlowNameKey, config.FlowJobName)
 	logger := log.With(internal.LoggerFromCtx(ctx), slog.String(string(shared.FlowNameKey), config.FlowJobName))
+	if attempt := activity.GetInfo(ctx).Attempt; attempt > 1 {
+		a.Alerter.LogFlowWarning(ctx, config.FlowJobName, fmt.Errorf(
+			"partition batch %d restarted (attempt %d) after a failed or lost attempt", partitions.BatchId, attempt))
+	}
 
 	if err := monitoring.UpdateStartTimeForQRepRun(ctx, a.CatalogPool, runUUID); err != nil {
 		return fmt.Errorf("failed to update start time for qrep run: %w", err)
