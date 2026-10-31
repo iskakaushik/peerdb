@@ -611,7 +611,7 @@ var DynamicSettings = [...]*protos.DynamicSetting{
 		Name: "PEERDB_POSTGRES_RAW_BATCH_CLEANUP_THRESHOLD",
 		Description: "Number of normalized batches to retain in raw table. After normalize, batches older " +
 			"than normalize_batch_id minus this value are deleted. 0 disables cleanup",
-		DefaultValue:     "0",
+		DefaultValue:     "10",
 		ValueType:        protos.DynconfValueType_INT,
 		ApplyMode:        protos.DynconfApplyMode_APPLY_MODE_IMMEDIATE,
 		TargetForSetting: protos.DynconfTarget_POSTGRES,
