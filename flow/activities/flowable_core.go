@@ -697,6 +697,7 @@ func replicateXminPartition[TRead any, TWrite QRepStreamCloser, TSync connectors
 func (a *FlowableActivity) startNormalize(
 	ctx context.Context,
 	config *protos.FlowConnectionConfigsCore,
+	origin string,
 	batchID int64,
 	normalizeResponses *concurrency.LastChan,
 ) error {
@@ -722,6 +723,18 @@ func (a *FlowableActivity) startNormalize(
 	}
 	defer dstClose(ctx)
 
+	if origin != "" {
+		var paired bool
+		if err := a.CatalogPool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM flows f JOIN flows r ON r.id <> f.id
+			AND r.source_peer = f.destination_peer AND r.destination_peer = f.source_peer WHERE f.name = $1)`,
+			config.FlowJobName).Scan(&paired); err != nil {
+			return fmt.Errorf("failed to look up the reverse mirror: %w", err)
+		}
+		if !paired {
+			origin = ""
+		}
+	}
+
 	tableNameSchemaMapping, err := a.getTableNameSchemaMapping(ctx, config.FlowJobName)
 	if err != nil {
 		return fmt.Errorf("failed to get table name schema mapping: %w", err)
@@ -742,6 +755,7 @@ func (a *FlowableActivity) startNormalize(
 				TableMappings:          config.TableMappings,
 				SoftDeleteColName:      config.SoftDeleteColName,
 				SyncedAtColName:        config.SyncedAtColName,
+				Origin:                 origin,
 				SyncBatchID:            batchID,
 				Version:                config.Version,
 				Flags:                  config.Flags,
@@ -804,6 +818,7 @@ func (a *FlowableActivity) normalizeLoop(
 	ctx context.Context,
 	logger log.Logger,
 	config *protos.FlowConnectionConfigsCore,
+	origin string,
 	normalizeRequests *concurrency.LastChan,
 	normalizeResponses *concurrency.LastChan,
 	normalizingBatchID *atomic.Int64,
@@ -839,7 +854,7 @@ func (a *FlowableActivity) normalizeLoop(
 	retryLoop:
 		for {
 			normalizingBatchID.Store(reqBatchID)
-			if err := a.startNormalize(ctx, config, reqBatchID, normalizeResponses); err != nil {
+			if err := a.startNormalize(ctx, config, origin, reqBatchID, normalizeResponses); err != nil {
 				_ = a.Alerter.LogFlowError(ctx, config.FlowJobName, err)
 				// update req to latest normalize request & retry
 				select {

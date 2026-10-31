@@ -397,6 +397,7 @@ func (c *PostgresConnector) normalizeBatch(
 	req *model.NormalizeRecordsRequest,
 	normalizeStmtGen *normalizeStmtGenerator,
 ) (int, error) {
+	defer c.applyOrigin(ctx, req.Origin)()
 	tx, err := c.conn.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("error starting transaction for normalizing records: %w", err)
@@ -666,6 +667,7 @@ func (c *PostgresConnector) SyncFlowCleanup(ctx context.Context, jobName string)
 	if err := syncFlowCleanupTx.Commit(ctx); err != nil {
 		return fmt.Errorf("unable to commit transaction for sync flow cleanup: %w", err)
 	}
+	c.dropOrigins(ctx, jobName)
 
 	return nil
 }

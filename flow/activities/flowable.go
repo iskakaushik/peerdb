@@ -488,11 +488,19 @@ func (a *FlowableActivity) syncFlowSharedStream(
 	// Normalize is always 1 batch behind, allow 2 to still run in parallel with pull-sync
 	normBufferSize = max(normBufferSize, 2)
 
+	var origin string
+	if pgSrc, ok := srcConn.(*connpostgres.PostgresConnector); ok && destinationType == protos.DBType_POSTGRES {
+		if origin, err = pgSrc.OriginPrefix(ctx); err != nil {
+			return a.Alerter.LogFlowError(ctx, config.FlowJobName, err)
+		}
+		origin += config.FlowJobName
+	}
+
 	normCtx, cancelNormCtx := context.WithCancel(internal.WithOperationContext(ctx, protos.FlowOperation_FLOW_OPERATION_NORMALIZE))
 	defer cancelNormCtx()
 	go func() {
 		defer close(normDone)
-		a.normalizeLoop(normCtx, logger, config, normRequests, normResponses, &normalizingBatchID, &normalizeWaiting)
+		a.normalizeLoop(normCtx, logger, config, origin, normRequests, normResponses, &normalizingBatchID, &normalizeWaiting)
 	}()
 
 	var syncErr error
