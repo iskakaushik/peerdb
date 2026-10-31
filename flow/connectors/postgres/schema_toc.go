@@ -1,0 +1,159 @@
+package connpostgres
+
+import (
+	"bufio"
+	"io"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+const (
+	pgClassOID = 1259
+)
+
+type tocEntry struct {
+	desc  string
+	deps  []int
+	id    int
+	class uint32
+	oid   uint32
+}
+
+var (
+	tocListRE = regexp.MustCompile(`^(\d+); (\d+) (\d+) (.+)$`)
+	tocHeadRE = regexp.MustCompile(`^-- TOC entry (\d+) \(class \d+ OID \d+\)$`)
+	tocDepsRE = regexp.MustCompile(`^-- Dependencies: (\d+(?: \d+)*)$`)
+)
+
+func newTOCScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	return sc
+}
+
+func parseTOCList(r io.Reader) ([]tocEntry, error) {
+	var entries []tocEntry
+	sc := newTOCScanner(r)
+	for sc.Scan() {
+		m := tocListRE.FindStringSubmatch(sc.Text())
+		if m == nil {
+			continue
+		}
+		id, _ := strconv.Atoi(m[1])
+		class, _ := strconv.ParseUint(m[2], 10, 32)
+		oid, _ := strconv.ParseUint(m[3], 10, 32)
+		entries = append(entries, tocEntry{id: id, class: uint32(class), oid: uint32(oid), desc: m[4]})
+	}
+	return entries, sc.Err()
+}
+
+func parseTOCDeps(r io.Reader) (map[int][]int, error) {
+	deps := make(map[int][]int)
+	sc := newTOCScanner(r)
+	cur := 0
+	for sc.Scan() {
+		line := sc.Text()
+		if m := tocHeadRE.FindStringSubmatch(line); m != nil {
+			cur, _ = strconv.Atoi(m[1])
+			continue
+		}
+		if m := tocDepsRE.FindStringSubmatch(line); m != nil && cur != 0 {
+			for f := range strings.FieldsSeq(m[1]) {
+				d, _ := strconv.Atoi(f)
+				deps[cur] = append(deps[cur], d)
+			}
+		}
+		cur = 0
+	}
+	return deps, sc.Err()
+}
+
+type objAddr struct {
+	Type  string   `json:"t"`
+	Names []string `json:"n,omitempty"`
+	Args  []string `json:"a,omitempty"`
+}
+
+func (a objAddr) key() string {
+	return a.Type + "\x00" + strings.Join(a.Names, "\x00") + "\x01" + strings.Join(a.Args, "\x00")
+}
+
+type objInfo struct {
+	addr objAddr
+}
+
+type planInput struct {
+	info    map[int]objInfo
+	exists  map[string]bool
+	tables  map[uint32]bool
+	entries []tocEntry
+}
+
+type schemaPlan struct {
+	restore []int
+}
+
+func (e tocEntry) is(desc string) bool {
+	return strings.HasPrefix(e.desc, desc+" ")
+}
+
+func (e tocEntry) relation() bool {
+	return e.class == pgClassOID && !e.is("INDEX")
+}
+
+func (e tocEntry) table() bool {
+	return e.class == pgClassOID && e.is("TABLE")
+}
+
+func planRestore(in planInput) schemaPlan {
+	byID := make(map[int]tocEntry, len(in.entries))
+	for _, e := range in.entries {
+		byID[e.id] = e
+	}
+	scope := make(map[int]bool)
+	inScope := func(e tocEntry) bool {
+		if in.tables == nil {
+			return true
+		}
+		if e.table() && !in.tables[e.oid] {
+			return false
+		}
+		hit, rel := e.table(), false
+		for _, d := range e.deps {
+			if r, ok := byID[d]; ok && r.relation() {
+				rel = true
+				if scope[d] {
+					hit = true
+				} else if !in.exists[in.info[d].addr.key()] {
+					return false
+				}
+			}
+		}
+		return hit || !rel
+	}
+
+	var plan schemaPlan
+	picked := make(map[int]bool)
+	for _, e := range in.entries {
+		if !inScope(e) {
+			continue
+		}
+		if e.relation() {
+			scope[e.id] = true
+		}
+		info, known := in.info[e.id]
+		missing := !in.exists[info.addr.key()]
+		if !known {
+			missing = slices.ContainsFunc(e.deps, func(d int) bool { return picked[d] })
+		}
+		switch {
+		case !missing:
+		default:
+			picked[e.id] = true
+			plan.restore = append(plan.restore, e.id)
+		}
+	}
+	return plan
+}

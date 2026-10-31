@@ -295,7 +295,8 @@ func TestBuildPgDumpArgs(t *testing.T) {
 				User:     "admin",
 			},
 			wantArgs: []string{
-				"--schema-only", "--no-owner", "--no-privileges", "--no-policies", "--exclude-schema=_peerdb_internal",
+				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-policies", "--no-publications",
+				"--no-subscriptions", "--no-security-labels", "--no-tablespaces", "--exclude-schema=_peerdb_internal",
 				"-h", "src-host", "-p", "5432", "-d", "mydb", "-U", "admin",
 			},
 		},
@@ -307,7 +308,8 @@ func TestBuildPgDumpArgs(t *testing.T) {
 				Database: "test",
 			},
 			wantArgs: []string{
-				"--schema-only", "--no-owner", "--no-privileges", "--no-policies", "--exclude-schema=_peerdb_internal",
+				"--schema-only", "--format=custom", "--file=/tmp/s.dump", "--no-owner", "--no-privileges", "--no-policies", "--no-publications",
+				"--no-subscriptions", "--no-security-labels", "--no-tablespaces", "--exclude-schema=_peerdb_internal",
 				"-h", "localhost", "-p", "5432", "-d", "test",
 			},
 		},
@@ -315,7 +317,7 @@ func TestBuildPgDumpArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildPgDumpArgs(tt.config, tt.config.Host)
+			got := buildPgDumpArgs(tt.config, tt.config.Host, "/tmp/s.dump")
 			if !slices.Equal(got, tt.wantArgs) {
 				t.Fatalf("buildPgDumpArgs = %v, want %v", got, tt.wantArgs)
 			}

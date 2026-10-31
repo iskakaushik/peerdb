@@ -797,4 +797,5 @@ message RunPgDumpSchemaInput {
   string destination_name = 2;
   string flow_name = 3;
   map<string, string> env = 4;
+  repeated TableMapping table_mappings = 5;
 }

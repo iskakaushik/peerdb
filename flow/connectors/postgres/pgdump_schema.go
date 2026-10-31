@@ -26,57 +26,14 @@ import (
 // genuine DDL failures while remaining cross-version.
 var incompatibleLineRE = regexp.MustCompile(`^SET\s+transaction_timeout\s*=`)
 
-// RunPgDumpSchema streams a schema-only pg_dump from source directly into psql
-// on the destination, piping stdout into stdin without intermediate files.
-func RunPgDumpSchema(ctx context.Context, srcConfig *protos.PostgresConfig, dstConfig *protos.PostgresConfig) error {
-	srcAddr, err := resolvePgAddr(ctx, srcConfig)
-	if err != nil {
-		return fmt.Errorf("source: %w", err)
+func pgCmd(ctx context.Context, config *protos.PostgresConfig, addr pgAddr, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+config.Password)
+	if addr.hostaddr != "" {
+		cmd.Env = append(cmd.Env, "PGHOSTADDR="+addr.hostaddr)
 	}
-	dstAddr, err := resolvePgAddr(ctx, dstConfig)
-	if err != nil {
-		return fmt.Errorf("destination: %w", err)
-	}
-
-	if err := pipeCommand(ctx, srcConfig, dstConfig, srcAddr, dstAddr,
-		"pg_dump", buildPgDumpArgs(srcConfig, srcAddr.host)); err != nil {
-		return fmt.Errorf("pg_dump schema migration failed: %w", err)
-	}
-
-	return nil
-}
-
-// pipeCommand runs srcBinary with the given args, piping its stdout into psql on the destination.
-func pipeCommand(
-	ctx context.Context,
-	srcConfig *protos.PostgresConfig,
-	dstConfig *protos.PostgresConfig,
-	srcAddr pgAddr,
-	dstAddr pgAddr,
-	srcBinary string,
-	srcArgs []string,
-) error {
-	psqlArgs := buildPsqlArgs(dstConfig, dstAddr.host)
-
-	srcCmd := exec.CommandContext(ctx, srcBinary, srcArgs...)
-	psqlCmd := exec.CommandContext(ctx, "psql", psqlArgs...)
-
-	// set PGPASSWORD for each command via separate env slices
-	srcCmd.Env = append(os.Environ(), "PGPASSWORD="+srcConfig.Password)
-	psqlCmd.Env = append(os.Environ(), "PGPASSWORD="+dstConfig.Password)
-
-	if srcAddr.hostaddr != "" {
-		srcCmd.Env = append(srcCmd.Env, "PGHOSTADDR="+srcAddr.hostaddr)
-	}
-	if dstAddr.hostaddr != "" {
-		psqlCmd.Env = append(psqlCmd.Env, "PGHOSTADDR="+dstAddr.hostaddr)
-	}
-
-	// handle TLS env vars
-	appendTLSEnv(ctx, srcCmd, srcConfig, srcAddr)
-	appendTLSEnv(ctx, psqlCmd, dstConfig, dstAddr)
-
-	return runPipeline(ctx, srcCmd, psqlCmd, srcBinary, "psql", filterIncompatibleLines)
+	appendTLSEnv(ctx, cmd, config, addr)
+	return cmd
 }
 
 // filterIncompatibleLines copies r->w line by line, dropping statements that
@@ -338,7 +295,7 @@ func resolvePgAddr(ctx context.Context, config *protos.PostgresConfig) (pgAddr, 
 	return pgAddr{host: tlsHost, hostaddr: hostaddr}, nil
 }
 
-func buildPgDumpArgs(config *protos.PostgresConfig, host string) []string {
+func buildPgDumpArgs(config *protos.PostgresConfig, host string, file string) []string {
 	port := config.Port
 	if port == 0 {
 		port = 5432
@@ -346,10 +303,16 @@ func buildPgDumpArgs(config *protos.PostgresConfig, host string) []string {
 
 	args := []string{
 		"--schema-only",
+		"--format=custom",
+		"--file=" + file,
 		"--no-owner",
 		"--no-privileges",
 		// RLS policies reference roles that may not exist on the destination.
 		"--no-policies",
+		"--no-publications",
+		"--no-subscriptions",
+		"--no-security-labels",
+		"--no-tablespaces",
 		// PeerDB's internal bookkeeping schema
 		"--exclude-schema=_peerdb_internal",
 		"-h", host,

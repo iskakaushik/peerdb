@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"go.temporal.io/sdk/log"
@@ -264,6 +263,7 @@ func (s *SetupFlowExecution) runPgDumpSchema(
 		DestinationName: config.DestinationName,
 		FlowName:        config.FlowJobName,
 		Env:             config.Env,
+		TableMappings:   config.TableMappings,
 	}
 
 	var ran bool
@@ -272,17 +272,6 @@ func (s *SetupFlowExecution) runPgDumpSchema(
 	}
 
 	return ran, nil
-}
-
-// isTableAdditionChild reports whether this SetupFlow was launched as part of a
-// table-addition child CDC flow. Such workflows are spawned with a parent
-// workflow ID prefixed by additionalTablesCDCFlowPrefix.
-func isTableAdditionChild(ctx workflow.Context) bool {
-	parent := workflow.GetInfo(ctx).ParentWorkflowExecution
-	if parent == nil {
-		return false
-	}
-	return strings.HasPrefix(parent.ID, additionalTablesCDCFlowPrefix+"-")
 }
 
 // getPGAutomatedSchemaDump checks the PEERDB_PG_AUTOMATED_SCHEMA_DUMP env flag via an activity.
@@ -331,11 +320,9 @@ func (s *SetupFlowExecution) executeSetupFlow(
 
 	// pg_dump silently no-ops for SSH tunnel / non-password-auth peers, so we
 	// only skip CreateNormalizedTable when the activity reports it actually ran.
-	// Skip pg_dump for resync (tables get _resync suffix and are swapped) and for
-	// table-addition child workflows.
+	// Skip pg_dump for resync (tables get _resync suffix and are swapped).
 	skipCreateTables := false
-	if config.System == protos.TypeSystem_PG && !config.Resync && !isTableAdditionChild(ctx) &&
-		s.getPGAutomatedSchemaDump(ctx, config.Env) {
+	if config.System == protos.TypeSystem_PG && !config.Resync && s.getPGAutomatedSchemaDump(ctx, config.Env) {
 		ran, err := s.runPgDumpSchema(ctx, config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to run pg_dump schema migration: %w", err)
