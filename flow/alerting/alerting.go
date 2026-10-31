@@ -1,6 +1,7 @@
 package alerting
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -139,18 +140,6 @@ func (a *Alerter) AlertIfSlotLag(ctx context.Context, alertKeys *AlertKeys, slot
 		return
 	}
 
-	// catalog cannot use default threshold to space alerts properly, use the lowest set threshold instead
-	lowestSlotLagMBAlertThreshold := defaultSlotLagMBAlertThreshold
-	var alertSendersForMirrors []AlertSenderConfig
-	for _, alertSenderConfig := range alertSenderConfigs {
-		if len(alertSenderConfig.AlertForMirrors) == 0 || slices.Contains(alertSenderConfig.AlertForMirrors, alertKeys.FlowName) {
-			alertSendersForMirrors = append(alertSendersForMirrors, alertSenderConfig)
-			if alertSenderConfig.Sender.getSlotLagMBAlertThreshold() > 0 {
-				lowestSlotLagMBAlertThreshold = min(lowestSlotLagMBAlertThreshold, alertSenderConfig.Sender.getSlotLagMBAlertThreshold())
-			}
-		}
-	}
-
 	thresholdAlertKey := fmt.Sprintf("%s Slot Lag Threshold Exceeded for Peer %s", deploymentUIDPrefix, alertKeys.PeerName)
 	thresholdAlertMessageTemplate := fmt.Sprintf("%sSlot `%s` on peer `%s` has exceeded threshold size of %%dMB, "+
 		`currently at %.2fMB!`, deploymentUIDPrefix, slotInfo.SlotName, alertKeys.PeerName, slotInfo.LagInMb)
@@ -159,21 +148,15 @@ func (a *Alerter) AlertIfSlotLag(ctx context.Context, alertKeys *AlertKeys, slot
 	badWalStatusAlertMessage := fmt.Sprintf("%sSlot `%s` on peer `%s` has bad WAL status: `%s`",
 		deploymentUIDPrefix, slotInfo.SlotName, alertKeys.PeerName, slotInfo.WalStatus)
 
-	for _, alertSenderConfig := range alertSendersForMirrors {
-		if a.checkAndAddAlertToCatalog(ctx,
-			alertSenderConfig.Id, thresholdAlertKey,
-			fmt.Sprintf(thresholdAlertMessageTemplate, lowestSlotLagMBAlertThreshold)) {
-			if alertSenderConfig.Sender.getSlotLagMBAlertThreshold() > 0 {
-				if slotInfo.LagInMb > float32(alertSenderConfig.Sender.getSlotLagMBAlertThreshold()) {
-					a.alertToProvider(ctx, alertSenderConfig, thresholdAlertKey,
-						fmt.Sprintf(thresholdAlertMessageTemplate, alertSenderConfig.Sender.getSlotLagMBAlertThreshold()))
-				}
-			} else {
-				if slotInfo.LagInMb > float32(defaultSlotLagMBAlertThreshold) {
-					a.alertToProvider(ctx, alertSenderConfig, thresholdAlertKey,
-						fmt.Sprintf(thresholdAlertMessageTemplate, defaultSlotLagMBAlertThreshold))
-				}
-			}
+	for _, alertSenderConfig := range alertSenderConfigs {
+		if len(alertSenderConfig.AlertForMirrors) > 0 && !slices.Contains(alertSenderConfig.AlertForMirrors, alertKeys.FlowName) {
+			continue
+		}
+		threshold := cmp.Or(alertSenderConfig.Sender.getSlotLagMBAlertThreshold(), defaultSlotLagMBAlertThreshold)
+		thresholdAlertMessage := fmt.Sprintf(thresholdAlertMessageTemplate, threshold)
+		if threshold > 0 && slotInfo.LagInMb > float32(threshold) &&
+			a.checkAndAddAlertToCatalog(ctx, alertSenderConfig.Id, thresholdAlertKey, thresholdAlertMessage) {
+			a.alertToProvider(ctx, alertSenderConfig, thresholdAlertKey, thresholdAlertMessage)
 		}
 
 		if (slotInfo.WalStatus == "lost" || slotInfo.WalStatus == "unreserved") &&
@@ -197,18 +180,10 @@ func (a *Alerter) AlertIfOpenConnections(ctx context.Context, alertKeys *AlertKe
 		deploymentUIDPrefix = fmt.Sprintf("[%s] - ", internal.PeerDBDeploymentUID())
 	}
 
-	// same as with slot lag, use lowest threshold for catalog
 	defaultOpenConnectionsThreshold, err := internal.PeerDBOpenConnectionsAlertThreshold(ctx, nil)
 	if err != nil {
 		internal.LoggerFromCtx(ctx).Warn("failed to get open connections alert threshold from catalog", slog.Any("error", err))
 		return
-	}
-	lowestOpenConnectionsThreshold := defaultOpenConnectionsThreshold
-	for _, alertSender := range alertSenderConfigs {
-		if alertSender.Sender.getOpenConnectionsAlertThreshold() > 0 {
-			lowestOpenConnectionsThreshold = min(lowestOpenConnectionsThreshold,
-				alertSender.Sender.getOpenConnectionsAlertThreshold())
-		}
 	}
 
 	alertKey := fmt.Sprintf("%s Max Open Connections Threshold Exceeded for Peer %s", deploymentUIDPrefix, alertKeys.PeerName)
@@ -216,26 +191,15 @@ func (a *Alerter) AlertIfOpenConnections(ctx context.Context, alertKeys *AlertKe
 		` has exceeded threshold size of %%d connections, currently at %d connections!`,
 		deploymentUIDPrefix, openConnections.UserName, alertKeys.PeerName, openConnections.CurrentOpenConnections)
 
-	if openConnections.CurrentOpenConnections > int64(lowestOpenConnectionsThreshold) {
-		for _, alertSenderConfig := range alertSenderConfigs {
-			if len(alertSenderConfig.AlertForMirrors) > 0 &&
-				!slices.Contains(alertSenderConfig.AlertForMirrors, alertKeys.FlowName) {
-				continue
-			}
-			if a.checkAndAddAlertToCatalog(ctx,
-				alertSenderConfig.Id, alertKey, fmt.Sprintf(alertMessageTemplate, lowestOpenConnectionsThreshold)) {
-				if alertSenderConfig.Sender.getOpenConnectionsAlertThreshold() > 0 {
-					if openConnections.CurrentOpenConnections > int64(alertSenderConfig.Sender.getOpenConnectionsAlertThreshold()) {
-						a.alertToProvider(ctx, alertSenderConfig, alertKey,
-							fmt.Sprintf(alertMessageTemplate, alertSenderConfig.Sender.getOpenConnectionsAlertThreshold()))
-					}
-				} else {
-					if openConnections.CurrentOpenConnections > int64(defaultOpenConnectionsThreshold) {
-						a.alertToProvider(ctx, alertSenderConfig, alertKey,
-							fmt.Sprintf(alertMessageTemplate, defaultOpenConnectionsThreshold))
-					}
-				}
-			}
+	for _, alertSenderConfig := range alertSenderConfigs {
+		if len(alertSenderConfig.AlertForMirrors) > 0 && !slices.Contains(alertSenderConfig.AlertForMirrors, alertKeys.FlowName) {
+			continue
+		}
+		threshold := cmp.Or(alertSenderConfig.Sender.getOpenConnectionsAlertThreshold(), defaultOpenConnectionsThreshold)
+		alertMessage := fmt.Sprintf(alertMessageTemplate, threshold)
+		if openConnections.CurrentOpenConnections > int64(threshold) &&
+			a.checkAndAddAlertToCatalog(ctx, alertSenderConfig.Id, alertKey, alertMessage) {
+			a.alertToProvider(ctx, alertSenderConfig, alertKey, alertMessage)
 		}
 	}
 }
