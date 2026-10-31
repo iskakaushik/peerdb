@@ -229,7 +229,7 @@ func TestParseTOC(t *testing.T) {
 
 func TestPlanSubsetScope(t *testing.T) {
 	plan := planRestore(testPlanInput(t))
-	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 54, 56, 57}, plan.restore)
+	require.Equal(t, []int{15, 20, 30, 31, 32, 35, 36, 37, 38, 40, 41, 42, 43, 50, 54, 57}, plan.restore)
 	require.Equal(t, []int{52}, plan.fks, "the FK to the unmirrored table is dropped")
 	require.Equal(t, []uint32{200, 201, 208, 209}, plan.created)
 	require.Equal(t, []int{55}, plan.held)
@@ -258,7 +258,7 @@ func TestPlanTableAddition(t *testing.T) {
 	in.tables = map[uint32]bool{202: true}
 	in.exists = existing(in, 15, 20, 30, 31, 35, 37, 38, 40, 50, 52)
 	plan := planRestore(in)
-	require.Equal(t, []int{33, 34, 39, 51, 56}, plan.restore)
+	require.Equal(t, []int{33, 34, 39, 51}, plan.restore)
 	require.Equal(t, []int{53}, plan.fks, "the FK from an existing table to the added one is added")
 }
 
@@ -266,7 +266,7 @@ func TestPlanWholeDatabase(t *testing.T) {
 	in := testPlanInput(t)
 	in.tables = nil
 	plan := planRestore(in)
-	require.Len(t, plan.restore, 21)
+	require.Len(t, plan.restore, 20)
 	require.Equal(t, []int{52, 53}, plan.fks)
 }
 

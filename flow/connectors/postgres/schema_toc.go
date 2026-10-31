@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	pgClassOID  = 1259
-	pgPolicyOID = 3256
+	pgClassOID        = 1259
+	pgPolicyOID       = 3256
+	pgEventTriggerOID = 3466
 )
 
 type tocEntry struct {
@@ -158,6 +159,7 @@ func planRestore(in planInput) schemaPlan {
 		}
 		switch {
 		case (e.post && !in.post) || (!e.post && !in.pre) || !missing:
+		case e.class == pgEventTriggerOID:
 		case e.class == pgPolicyOID && !allExist(in.exists, info.roles):
 			plan.held = append(plan.held, e.id)
 		case e.is("FK CONSTRAINT"):
