@@ -440,6 +440,9 @@ func (h *FlowRequestHandler) FlowStateChange(
 ) (*protos.FlowStateChangeResponse, APIError) {
 	logs := slog.String(string(shared.FlowNameKey), req.FlowJobName)
 	slog.InfoContext(ctx, "FlowStateChange called", logs, slog.Any("req", req))
+	if req.RequestedFlowState == protos.FlowStatus_STATUS_TERMINATED {
+		req.RequestedFlowState = protos.FlowStatus_STATUS_TERMINATING
+	}
 	if underMaintenance, err := internal.PeerDBMaintenanceModeEnabled(ctx, nil); err != nil {
 		slog.ErrorContext(ctx, "unable to check maintenance mode", logs, slog.Any("error", err))
 		return nil, NewInternalApiError(fmt.Errorf("unable to check maintenance mode: %w", err))
