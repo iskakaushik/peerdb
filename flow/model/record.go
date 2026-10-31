@@ -197,3 +197,30 @@ func (r *MessageRecord[T]) GetItems() T {
 
 func (r *MessageRecord[T]) PopulateCountMap(mapOfCounts map[string]*RecordTypeCounts) {
 }
+
+type TruncateRecord[T Items] struct {
+	DestinationTableNames []string
+	Cascade               bool
+	RestartIdentity       bool
+	BaseRecord
+}
+
+func (*TruncateRecord[T]) Kind() string {
+	return "truncate"
+}
+
+func (r *TruncateRecord[T]) GetDestinationTableName() string {
+	return ""
+}
+
+func (r *TruncateRecord[T]) GetSourceTableName() string {
+	return ""
+}
+
+func (r *TruncateRecord[T]) GetItems() T {
+	var none T
+	return none
+}
+
+func (r *TruncateRecord[T]) PopulateCountMap(mapOfCounts map[string]*RecordTypeCounts) {
+}

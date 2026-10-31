@@ -24,6 +24,7 @@ type dstTable struct {
 
 type batchTable struct {
 	name    string
+	since   int64
 	changed bool
 }
 
@@ -37,10 +38,13 @@ const (
 		AND a.attnum = ANY((i.indkey::int2[])[0:i.indnkeyatts-1]) AND a.attname = ANY($2::text[])) keyed
 		FROM pg_index i WHERE i.indrelid = $1::regclass) i`
 	batchTablesSQL = `SELECT _peerdb_destination_table_name,
-	bool_or(_peerdb_record_type = 2 OR _peerdb_record_type = 1 AND _peerdb_match_data <> '{}')
+	coalesce(max(_peerdb_timestamp) FILTER (WHERE _peerdb_record_type = 3), 0),
+	bool_or(_peerdb_record_type = 2 OR _peerdb_record_type = 1 AND _peerdb_match_data <> '{}'),
+	coalesce(bool_or(_peerdb_data @> '{"cascade":true}') FILTER (WHERE _peerdb_record_type = 3), false),
+	coalesce(bool_or(_peerdb_data @> '{"restart_identity":true}') FILTER (WHERE _peerdb_record_type = 3), false)
 	FROM %s.%s WHERE _peerdb_batch_id = $1 GROUP BY 1`
 	keyMovesSQL = `SELECT EXISTS(SELECT FROM %s.%s WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name = $2
-	AND (_peerdb_record_type = 1 AND (%s) OR _peerdb_record_type = 2 AND (%s)))`
+	AND _peerdb_timestamp > $3 AND (_peerdb_record_type = 1 AND (%s) OR _peerdb_record_type = 2 AND (%s)))`
 )
 
 func (c *PostgresConnector) getDstTable(ctx context.Context, tx pgx.Tx, table string, keys []string) (dstTable, error) {
@@ -57,22 +61,40 @@ func (c *PostgresConnector) getDstTable(ctx context.Context, tx pgx.Tx, table st
 
 func (c *PostgresConnector) getBatchTables(
 	ctx context.Context, tx pgx.Tx, batchID int64, gen *normalizeStmtGenerator,
-) ([]batchTable, error) {
+) ([]batchTable, string, error) {
 	rows, err := tx.Query(ctx, fmt.Sprintf(batchTablesSQL, c.metadataSchema, gen.rawTableName), batchID)
 	if err != nil {
-		return nil, fmt.Errorf("error while retrieving table names for normalization: %w", err)
+		return nil, "", fmt.Errorf("error while retrieving table names for normalization: %w", err)
 	}
-	tables, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (batchTable, error) {
-		var t batchTable
-		return t, row.Scan(&t.name, &t.changed)
-	})
-	return slices.DeleteFunc(tables, func(t batchTable) bool {
+	var tables []batchTable
+	var truncate []string
+	var cascade, restart, tc, tr bool
+	var t batchTable
+	if _, err := pgx.ForEachRow(rows, []any{&t.name, &t.since, &t.changed, &tc, &tr}, func() error {
 		if _, ok := gen.tableSchemaMapping[t.name]; !ok {
 			c.logger.Warn("table not found in table to schema mapping", "table", t.name)
-			return true
+			return nil
 		}
-		return false
-	}), err
+		tables = append(tables, t)
+		if t.since > 0 {
+			qt, err := common.ParseTableIdentifier(t.name)
+			if err != nil {
+				return err
+			}
+			truncate, cascade, restart = append(truncate, qt.String()), cascade || tc, restart || tr
+		}
+		return nil
+	}); err != nil || truncate == nil {
+		return tables, "", err
+	}
+	stmt := "TRUNCATE " + strings.Join(truncate, ",")
+	if restart {
+		stmt += " RESTART IDENTITY"
+	}
+	if cascade {
+		stmt += " CASCADE"
+	}
+	return tables, stmt, nil
 }
 
 func (c *PostgresConnector) keyMoves(ctx context.Context, tx pgx.Tx, raw string, batchID int64, t batchTable, keys []string) (bool, error) {
@@ -85,7 +107,7 @@ func (c *PostgresConnector) keyMoves(ctx context.Context, tx pgx.Tx, raw string,
 	}
 	var r bool
 	err := tx.QueryRow(ctx, fmt.Sprintf(keyMovesSQL, c.metadataSchema, raw,
-		strings.Join(moved, " OR "), strings.Join(null, " OR ")), batchID, t.name).Scan(&r)
+		strings.Join(moved, " OR "), strings.Join(null, " OR ")), batchID, t.name, t.since).Scan(&r)
 	return r, err
 }
 
@@ -116,7 +138,7 @@ func (c *PostgresConnector) normalizeTable(
 		rows := 0
 		for _, stmt := range gen.generateNormalizeStatements(t.name) {
 			var ct pgconn.CommandTag
-			if ct, err = tx.Exec(ctx, stmt, batchID, t.name); err != nil {
+			if ct, err = tx.Exec(ctx, stmt, batchID, t.name, t.since); err != nil {
 				break
 			}
 			rows += int(ct.RowsAffected())
@@ -129,6 +151,6 @@ func (c *PostgresConnector) normalizeTable(
 			return 0, err
 		}
 	}
-	_, err = tx.Exec(ctx, gen.generateOrderedStatement(t.name, batchID), pgx.QueryExecModeSimpleProtocol)
+	_, err = tx.Exec(ctx, gen.generateOrderedStatement(t.name, batchID, t.since), pgx.QueryExecModeSimpleProtocol)
 	return 0, err
 }

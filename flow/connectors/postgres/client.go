@@ -55,7 +55,7 @@ const (
 		SELECT r.*,_peerdb_record_type,_peerdb_unchanged_toast_columns, _peerdb_timestamp,
 		RANK() OVER (PARTITION BY %s ORDER BY _peerdb_timestamp DESC) AS _peerdb_rank
 		FROM %s.%s, jsonb_to_record(_peerdb_data) AS r(%s)
-		WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name = $2
+		WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name = $2 AND _peerdb_timestamp > $3
 	)
 	MERGE INTO %s dst
 	USING (SELECT %s,_peerdb_record_type,_peerdb_unchanged_toast_columns
@@ -67,7 +67,7 @@ const (
 	mergeStatementSQL = `WITH src_rank AS (
 		SELECT _peerdb_data,_peerdb_record_type,_peerdb_unchanged_toast_columns, _peerdb_timestamp,
 		RANK() OVER (PARTITION BY %s ORDER BY _peerdb_timestamp DESC) AS _peerdb_rank
-		FROM %s.%s WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name=$2
+		FROM %s.%s WHERE _peerdb_batch_id = $1 AND _peerdb_destination_table_name=$2 AND _peerdb_timestamp > $3
 	)
 	MERGE INTO %s dst
 	USING (SELECT %s,_peerdb_record_type,_peerdb_unchanged_toast_columns
@@ -79,14 +79,14 @@ const (
 	fallbackUpsertStatementSQL = `WITH src_rank AS (
 		SELECT _peerdb_data,_peerdb_record_type,_peerdb_unchanged_toast_columns,
 		RANK() OVER (PARTITION BY %s ORDER BY _peerdb_timestamp DESC) AS _peerdb_rank
-		FROM %s.%s WHERE _peerdb_batch_id=$1 AND _peerdb_destination_table_name=$2
+		FROM %s.%s WHERE _peerdb_batch_id=$1 AND _peerdb_destination_table_name=$2 AND _peerdb_timestamp>$3
 	)
 	INSERT INTO %s (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM src_rank WHERE _peerdb_rank=1 AND _peerdb_record_type!=2
 	ON CONFLICT (%s) DO UPDATE SET %s`
 	fallbackDeleteStatementSQL = `WITH src_rank AS (
 		SELECT _peerdb_data,_peerdb_record_type,_peerdb_unchanged_toast_columns,
 		RANK() OVER (PARTITION BY %s ORDER BY _peerdb_timestamp DESC) AS _peerdb_rank
-		FROM %s.%s WHERE _peerdb_batch_id=$1 AND _peerdb_destination_table_name=$2
+		FROM %s.%s WHERE _peerdb_batch_id=$1 AND _peerdb_destination_table_name=$2 AND _peerdb_timestamp>$3
 	)
 	%s src_rank WHERE %s AND src_rank._peerdb_rank=1 AND src_rank._peerdb_record_type=2`
 

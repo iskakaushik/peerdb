@@ -1026,6 +1026,11 @@ func PullCdcRecords[Items model.Items](
 							}
 						}
 
+					case *model.TruncateRecord[Items]:
+						if err := addRecordWithKey(model.TableWithPkey{}, rec); err != nil {
+							return err
+						}
+
 					case *model.RelationRecord[Items]:
 						tableSchemaDelta := r.TableSchemaDelta
 						if len(tableSchemaDelta.AddedColumns) > 0 {
@@ -1126,6 +1131,8 @@ func processMessage[Items model.Items](
 		return processUpdateMessage(p, xld.WALStart, msg, processor, customTypeMapping, warnedReplIdentTables)
 	case *pglogrepl.DeleteMessage:
 		return processDeleteMessage(p, xld.WALStart, msg, processor, customTypeMapping)
+	case *pglogrepl.TruncateMessage:
+		return processTruncateMessage[Items](p, xld.WALStart, msg), nil
 	case *pglogrepl.CommitMessage:
 		// for a commit message, update the last checkpoint id for the record batch.
 		logger.Debug("CommitMessage",

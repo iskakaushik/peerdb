@@ -99,7 +99,14 @@ func syncRecordsCore[Items model.Items](
 		return lastTimestamp
 	}
 	tableNameRowsMapping := utils.InitialiseTableRowsMap(req.TableMappings)
+	var pending [][]any
 	streamReadFunc := func() ([]any, error) {
+		if len(pending) > 0 {
+			row := pending[0]
+			pending = pending[1:]
+			numRecords += 1
+			return row, nil
+		}
 		for record := range req.Records.GetRecords() {
 			var row []any
 			switch typedRecord := record.(type) {
@@ -169,6 +176,13 @@ func syncRecordsCore[Items model.Items](
 					req.SyncBatchID,
 					utils.KeysToString(typedRecord.UnchangedToastColumns),
 				}
+
+			case *model.TruncateRecord[Items]:
+				flags := fmt.Sprintf(`{"cascade":%t,"restart_identity":%t}`, typedRecord.Cascade, typedRecord.RestartIdentity)
+				for _, table := range typedRecord.DestinationTableNames {
+					pending = append(pending, []any{uuid.New(), timestamp(), table, flags, 3, "{}", req.SyncBatchID, ""})
+				}
+				row, pending = pending[0], pending[1:]
 
 			case *model.MessageRecord[Items]:
 				continue
@@ -357,7 +371,7 @@ func (c *PostgresConnector) normalizeBatch(
 	}
 	defer shared.RollbackTx(tx, c.logger)
 
-	tables, err := c.getBatchTables(ctx, tx, batchID, normalizeStmtGen)
+	tables, truncate, err := c.getBatchTables(ctx, tx, batchID, normalizeStmtGen)
 	if err != nil {
 		return 0, err
 	}
@@ -367,6 +381,12 @@ func (c *PostgresConnector) normalizeBatch(
 				return 0, fmt.Errorf("failed to set session_replication_role to replica: %w", err)
 			}
 			break
+		}
+	}
+
+	if truncate != "" {
+		if _, err := tx.Exec(ctx, truncate); err != nil {
+			return 0, fmt.Errorf("failed to replay truncate: %w", err)
 		}
 	}
 

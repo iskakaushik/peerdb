@@ -9,7 +9,7 @@ import (
 	"github.com/PeerDB-io/peerdb/flow/pkg/common"
 )
 
-func (n *normalizeStmtGenerator) generateOrderedStatement(dstTable string, batchID int64) string {
+func (n *normalizeStmtGenerator) generateOrderedStatement(dstTable string, batchID int64, since int64) string {
 	schema, d := n.tableSchemaMapping[dstTable], n.dst[dstTable]
 	parsed, _ := common.ParseTableIdentifier(dstTable)
 	table := parsed.String()
@@ -109,10 +109,11 @@ func (n *normalizeStmtGenerator) generateOrderedStatement(dstTable string, batch
 <<_peerdb_apply>> DECLARE r record; BEGIN
 FOR r IN SELECT %s FROM %s.%s x, jsonb_to_record(x._peerdb_data) n(%s),
 jsonb_to_record(x._peerdb_data || coalesce(x._peerdb_match_data, '{}')) o(%s)
-WHERE x._peerdb_batch_id = %d AND x._peerdb_destination_table_name = %s ORDER BY x._peerdb_timestamp
+WHERE x._peerdb_batch_id = %d AND x._peerdb_destination_table_name = %s AND x._peerdb_timestamp > %d
+AND x._peerdb_record_type < 3 ORDER BY x._peerdb_timestamp
 LOOP %s END LOOP; END`, strings.Join(sel, ","),
 		n.metadataSchema, n.rawTableName, strings.Join(newDefs, ","), strings.Join(oldDefs, ","),
-		batchID, utils.QuoteLiteral(dstTable), body)
+		batchID, utils.QuoteLiteral(dstTable), since, body)
 	tag := "$_peerdb_apply$"
 	for strings.Contains(block, tag) {
 		tag = "$_" + tag[1:]
