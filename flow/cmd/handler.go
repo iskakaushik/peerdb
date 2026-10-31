@@ -247,6 +247,9 @@ func (h *FlowRequestHandler) createCDCFlow(
 
 	if _, err := h.temporalClient.ExecuteWorkflow(ctx, workflowOptions, peerflow.CDCFlowWorkflow, connectionConfigs, nil); err != nil {
 		slog.ErrorContext(ctx, "unable to start PeerFlow workflow", slog.Any("error", err))
+		if _, delErr := h.pool.Exec(ctx, "DELETE FROM flows WHERE name=$1", connectionConfigs.FlowJobName); delErr != nil {
+			slog.ErrorContext(ctx, "unable to remove flow job entry", slog.Any("error", delErr))
+		}
 		return nil, fmt.Errorf("unable to start PeerFlow workflow: %w", err)
 	}
 
