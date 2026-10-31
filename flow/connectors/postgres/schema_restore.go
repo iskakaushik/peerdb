@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -70,6 +71,9 @@ func RestoreSchema(ctx context.Context, src, dst *PostgresConnector, step Schema
 	var notes []string
 	for _, id := range plan.held {
 		notes = append(notes, "policy "+strings.Join(in.info[id].addr.Names, ".")+" held back: its roles are missing")
+	}
+	if step.PreData {
+		notes = append(notes, copyDatabaseSettings(ctx, src.conn, dst.conn, dst.Config.Database)...)
 	}
 	add := pickDeferred(plan, cons, in.exists)
 	postlude := deferredSQL(plan, cons)
@@ -180,4 +184,37 @@ func runRestore(ctx context.Context, config *protos.PostgresConfig, archive, lis
 		_, err := io.WriteString(w, postlude)
 		return err
 	})
+}
+
+var sessionGUCs = []string{
+	"default_transaction_read_only", "default_transaction_isolation", "session_replication_role",
+	"statement_timeout", "lock_timeout", "idle_in_transaction_session_timeout", "idle_session_timeout", "transaction_timeout",
+}
+
+const dbSettingsSQL = `
+select coalesce((select setconfig from pg_db_role_setting where setrole = 0
+  and setdatabase = (select oid from pg_database where datname = current_database())), '{}')`
+
+func copyDatabaseSettings(ctx context.Context, src, dst *pgx.Conn, database string) []string {
+	var settings, notes []string
+	if err := src.QueryRow(ctx, dbSettingsSQL).Scan(&settings); err != nil {
+		return []string{"failed to read database settings: " + err.Error()}
+	}
+	for _, kv := range settings {
+		name, value, _ := strings.Cut(kv, "=")
+		if slices.Contains(sessionGUCs, name) {
+			continue
+		}
+		if err := pgx.BeginFunc(ctx, dst, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "select set_config($1, $2, true)", name, value); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s SET %s FROM CURRENT",
+				common.QuoteIdentifier(database), common.QuoteIdentifier(name)))
+			return err
+		}); err != nil {
+			notes = append(notes, fmt.Sprintf("database setting %s not copied: %v", name, err))
+		}
+	}
+	return notes
 }
