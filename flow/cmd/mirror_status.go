@@ -942,7 +942,8 @@ func (h *FlowRequestHandler) ListMirrorLogs(
 	whereArgs := make([]any, 0, 4)
 	if req.FlowJobName != "" {
 		whereArgs = append(whereArgs, req.FlowJobName)
-		whereExprs = append(whereExprs, "position($1 in flow_name) > 0")
+		whereExprs = append(whereExprs, `(flow_name = $1 OR (starts_with(flow_name, 'clone_' || $1 || '_') AND $1 = (
+			SELECT name FROM flows WHERE starts_with(flow_name, 'clone_' || name || '_') ORDER BY length(name) DESC LIMIT 1)))`)
 	}
 
 	if req.Level != "" && req.Level != "all" {
