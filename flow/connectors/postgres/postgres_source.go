@@ -1036,26 +1036,17 @@ func (c *PostgresConnector) HandleSlotInfo(
 		)),
 	)
 
-	var intervalSinceLastNormalize *time.Duration
-	if err := alerter.CatalogPool.QueryRow(
-		ctx, "SELECT now()-last_updated_at FROM peerdb_stats.cdc_table_aggregate_counts WHERE flow_name=$1", alertKeys.FlowName,
-	).Scan(&intervalSinceLastNormalize); err != nil {
-		logger.Warn("failed to get interval since last normalize", slog.Any("error", err))
+	applyLag, slotStall, err := monitoring.GetMirrorStalls(ctx, catalogPool, alertKeys.FlowName, slotInfo)
+	if err != nil {
+		logger.Warn("failed to get mirror stalls", slog.Any("error", err))
 	}
-	// what if the first normalize errors out/hangs?
-	if intervalSinceLastNormalize == nil {
-		logger.Warn("interval since last normalize is nil")
-		return nil
-	}
-	if intervalSinceLastNormalize != nil {
-		slotMetricGauges.IntervalSinceLastNormalizeGauge.Record(ctx, intervalSinceLastNormalize.Seconds(),
-			metric.WithAttributeSet(attribute.NewSet(
-				attribute.String(otel_metrics.FlowNameKey, alertKeys.FlowName),
-				attribute.String(otel_metrics.PeerNameKey, alertKeys.PeerName),
-			)),
-		)
-		alerter.AlertIfTooLongSinceLastNormalize(ctx, alertKeys, *intervalSinceLastNormalize)
-	}
+	slotMetricGauges.IntervalSinceLastNormalizeGauge.Record(ctx, applyLag.Seconds(),
+		metric.WithAttributeSet(attribute.NewSet(
+			attribute.String(otel_metrics.FlowNameKey, alertKeys.FlowName),
+			attribute.String(otel_metrics.PeerNameKey, alertKeys.PeerName),
+		)),
+	)
+	alerter.AlertIfStalled(ctx, alertKeys, applyLag, slotStall)
 
 	return monitoring.AppendSlotSizeInfo(ctx, catalogPool, alertKeys.PeerName, slotInfo)
 }

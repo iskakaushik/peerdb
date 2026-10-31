@@ -400,8 +400,8 @@ var DynamicSettings = [...]*protos.DynamicSetting{
 	},
 	{
 		Name:             "PEERDB_INTERVAL_SINCE_LAST_NORMALIZE_THRESHOLD_MINUTES",
-		Description:      "Duration in minutes since last normalize to start alerting, 0 disables all alerting entirely",
-		DefaultValue:     "240",
+		Description:      "Minutes a mirror may lag (oldest unnormalized batch, or a stalled slot) before alerting, 0 disables this alert",
+		DefaultValue:     "30",
 		ValueType:        protos.DynconfValueType_UINT,
 		ApplyMode:        protos.DynconfApplyMode_APPLY_MODE_IMMEDIATE,
 		TargetForSetting: protos.DynconfTarget_ALL,

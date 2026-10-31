@@ -167,6 +167,26 @@ func GetPendingNormalizeLagByFlow(
 	return result, rows.Err()
 }
 
+func GetMirrorStalls(
+	ctx context.Context,
+	pool shared.CatalogPool,
+	flowJobName string,
+	slotInfo *protos.SlotInfo,
+) (time.Duration, time.Duration, error) {
+	var applyLag, slotStall time.Duration
+	err := pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT now() - min(sync_time) FROM peerdb_stats.cdc_batches
+			WHERE flow_name = $1 AND end_time IS NULL AND sync_time IS NOT NULL), '0'),
+		COALESCE((SELECT now() - greatest(min(updated_at), (SELECT max(end_time) FROM peerdb_stats.qrep_runs
+			WHERE parent_mirror_name = $1)) FROM peerdb_stats.peer_slot_size
+			WHERE slot_name = $2 AND confirmed_flush_lsn = $3 AND updated_at > now() - '1 day'::interval
+			AND $4 AND EXISTS (SELECT FROM flows WHERE name = $1 AND status = $5) HAVING count(*) > 0), '0')`,
+		flowJobName, slotInfo.SlotName, slotInfo.ConfirmedFlushLSN, slotInfo.ConfirmedToCurrentMb > 0,
+		protos.FlowStatus_STATUS_RUNNING,
+	).Scan(&applyLag, &slotStall)
+	return applyLag, slotStall, err
+}
+
 func AddCDCBatchTablesForFlow(
 	ctx context.Context,
 	pool shared.CatalogPool,

@@ -204,20 +204,13 @@ func (a *Alerter) AlertIfOpenConnections(ctx context.Context, alertKeys *AlertKe
 	}
 }
 
-func (a *Alerter) AlertIfTooLongSinceLastNormalize(ctx context.Context, alertKeys *AlertKeys, intervalSinceLastNormalize time.Duration) {
-	intervalSinceLastNormalizeThreshold, err := internal.PeerDBIntervalSinceLastNormalizeThresholdMinutes(ctx, nil)
+func (a *Alerter) AlertIfStalled(ctx context.Context, alertKeys *AlertKeys, applyLag time.Duration, slotStall time.Duration) {
+	thresholdMinutes, err := internal.PeerDBIntervalSinceLastNormalizeThresholdMinutes(ctx, nil)
 	if err != nil {
-		internal.LoggerFromCtx(ctx).
-			Warn("failed to get interval since last normalize threshold from catalog", slog.Any("error", err))
-	}
-
-	if intervalSinceLastNormalizeThreshold == 0 {
-		internal.LoggerFromCtx(ctx).Info("Alerting disabled via environment variable, returning")
+		internal.LoggerFromCtx(ctx).Warn("failed to get interval since last normalize threshold from catalog", slog.Any("error", err))
 		return
 	}
-	alertSenderConfigs, err := a.registerSendersFromPool(ctx)
-	if err != nil {
-		internal.LoggerFromCtx(ctx).Warn("failed to set alert senders", slog.Any("error", err))
+	if thresholdMinutes == 0 || max(applyLag, slotStall) <= time.Duration(thresholdMinutes)*time.Minute {
 		return
 	}
 
@@ -225,22 +218,22 @@ func (a *Alerter) AlertIfTooLongSinceLastNormalize(ctx context.Context, alertKey
 	if internal.PeerDBDeploymentUID() != "" {
 		deploymentUIDPrefix = fmt.Sprintf("[%s] - ", internal.PeerDBDeploymentUID())
 	}
+	a.alertMirror(ctx, alertKeys.FlowName,
+		fmt.Sprintf("%s Too long since last data normalize for PeerDB mirror %s", deploymentUIDPrefix, alertKeys.FlowName),
+		fmt.Sprintf("%sMirror `%s` is not keeping up: oldest unapplied batch synced %s ago, slot `%s` stalled for %s.",
+			deploymentUIDPrefix, alertKeys.FlowName, applyLag.Truncate(time.Second), alertKeys.SlotName, slotStall.Truncate(time.Second)))
+}
 
-	if intervalSinceLastNormalize > time.Duration(intervalSinceLastNormalizeThreshold)*time.Minute {
-		alertKey := fmt.Sprintf("%s Too long since last data normalize for PeerDB mirror %s",
-			deploymentUIDPrefix, alertKeys.FlowName)
-		alertMessage := fmt.Sprintf("%sData hasn't been synced to the target for mirror `%s` since the last `%s`."+
-			` This could indicate an issue with the pipeline — please check the UI and logs to confirm.`+
-			` Alternatively, it might be that the source database is idle and not receiving new updates.`, deploymentUIDPrefix,
-			alertKeys.FlowName, intervalSinceLastNormalize)
-
-		for _, alertSenderConfig := range alertSenderConfigs {
-			if len(alertSenderConfig.AlertForMirrors) == 0 ||
-				slices.Contains(alertSenderConfig.AlertForMirrors, alertKeys.FlowName) {
-				if a.checkAndAddAlertToCatalog(ctx, alertSenderConfig.Id, alertKey, alertMessage) {
-					a.alertToProvider(ctx, alertSenderConfig, alertKey, alertMessage)
-				}
-			}
+func (a *Alerter) alertMirror(ctx context.Context, flowName string, alertKey string, alertMessage string) {
+	alertSenderConfigs, err := a.registerSendersFromPool(ctx)
+	if err != nil {
+		internal.LoggerFromCtx(ctx).Warn("failed to set alert senders", slog.Any("error", err))
+		return
+	}
+	for _, alertSenderConfig := range alertSenderConfigs {
+		if (len(alertSenderConfig.AlertForMirrors) == 0 || slices.Contains(alertSenderConfig.AlertForMirrors, flowName)) &&
+			a.checkAndAddAlertToCatalog(ctx, alertSenderConfig.Id, alertKey, alertMessage) {
+			a.alertToProvider(ctx, alertSenderConfig, alertKey, alertMessage)
 		}
 	}
 }
