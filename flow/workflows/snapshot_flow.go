@@ -84,7 +84,7 @@ func (s *SnapshotFlowExecution) closeSlotKeepAlive(
 	s.logger.Info("closing slot keep alive for peer flow")
 
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		ScheduleToCloseTimeout: 15 * time.Minute,
+		ScheduleToCloseTimeout: 3 * time.Minute,
 		StartToCloseTimeout:    3 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval: 1 * time.Minute,
