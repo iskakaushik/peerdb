@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,8 @@ import (
 	"github.com/PeerDB-io/peerdb/flow/otel_metrics"
 	"github.com/PeerDB-io/peerdb/flow/shared"
 )
+
+var sentAlerts sync.Map
 
 // alerting service, no cool name :(
 type Alerter struct {
@@ -276,14 +279,18 @@ func (a *Alerter) checkAndAddAlertToCatalog(ctx context.Context, alertConfigId i
 		return false
 	}
 
+	memKey := fmt.Sprintf("%d %s", alertConfigId, alertKey)
 	if time.Since(createdTimestamp) >= dur {
 		if _, err := a.CatalogPool.Exec(ctx,
 			"INSERT INTO peerdb_stats.alerts_v1(alert_key,alert_message,alert_config_id) VALUES($1,$2,$3)",
 			alertKey, alertMessage, alertConfigId,
 		); err != nil {
 			internal.LoggerFromCtx(ctx).Warn("failed to insert alert", slog.Any("error", err))
-			return false
+			if last, ok := sentAlerts.Load(memKey); ok && time.Since(last.(time.Time)) < dur {
+				return false
+			}
 		}
+		sentAlerts.Store(memKey, time.Now())
 		return true
 	}
 
