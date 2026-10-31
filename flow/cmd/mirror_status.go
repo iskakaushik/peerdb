@@ -201,7 +201,8 @@ func (h *FlowRequestHandler) cdcFlowStatus(
 
 	var rowsSynced int64
 	if err := h.pool.QueryRow(ctx,
-		"select coalesce(sum(rows_in_batch), 0) from peerdb_stats.cdc_batches where flow_name=$1", req.FlowJobName,
+		"select coalesce(sum(rows_in_batch), 0) from peerdb_stats.cdc_batches where flow_name=$1 and end_time is not null",
+		req.FlowJobName,
 	).Scan(&rowsSynced); err != nil {
 		return nil, err
 	}
