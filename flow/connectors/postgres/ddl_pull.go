@@ -3,10 +3,12 @@ package connpostgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"github.com/jackc/pglogrepl"
 
+	"github.com/PeerDB-io/peerdb/flow/connectors/utils/monitoring"
 	"github.com/PeerDB-io/peerdb/flow/generated/protos"
 	"github.com/PeerDB-io/peerdb/flow/model"
 	pkg_pg "github.com/PeerDB-io/peerdb/flow/pkg/postgres"
@@ -25,6 +27,9 @@ func (p *PostgresCDCSource) schemaChange(
 	prevNames := make([]string, 0, len(prev.Columns))
 	for _, col := range prev.Columns {
 		prevNames = append(prevNames, col.Name)
+	}
+	if p.ddlCapture && slices.Equal(names, prevNames) {
+		return nil, nil
 	}
 	defJSON, err := p.fetchTableDef(ctx, relID)
 	if err != nil {
@@ -159,4 +164,39 @@ func (p *PostgresCDCSource) typeNames(ctx context.Context, def *TableDef) (func(
 		name, err := pkg_pg.OIDToName(p.typeMap, resolve(oid), custom)
 		return name, schemas[resolve(oid)], err
 	}, nil
+}
+
+func processDDLMessage[Items model.Items](
+	ctx context.Context, p *PostgresCDCSource, msg *pglogrepl.LogicalDecodingMessage,
+) (model.Record[Items], error) {
+	var obj struct {
+		Table json.RawMessage `json:"table"`
+	}
+	if err := json.Unmarshal(msg.Content, &obj); err != nil {
+		return nil, fmt.Errorf("invalid %s message: %w", ddlMessagePrefix, err)
+	}
+	var delta *protos.TableSchemaDelta
+	if obj.Table == nil {
+		for _, schema := range p.tableNameSchemaMapping {
+			if schema.System == protos.TypeSystem_PG {
+				p.customTypeMapping = nil
+				delta = &protos.TableSchemaDelta{System: schema.System, NewSchema: &protos.TableSchema{Definition: string(msg.Content)}}
+			}
+			break
+		}
+	} else if def, err := parseTableDef(string(obj.Table)); err != nil {
+		return nil, err
+	} else if srcName, ok := p.srcTableIDNameMapping[def.Rel]; ok {
+		dst := p.tableNameMapping[srcName]
+		if prev := p.tableNameSchemaMapping[dst.Name]; prev.GetSystem() == protos.TypeSystem_PG {
+			if delta, err = p.tableSchemaDelta(ctx, srcName, dst, prev, string(obj.Table), def); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if delta == nil {
+		return nil, nil
+	}
+	return &model.RelationRecord[Items]{BaseRecord: p.baseRecord(msg.LSN), TableSchemaDelta: delta},
+		monitoring.AuditSchemaDelta(ctx, p.catalogPool.Pool, p.flowJobName, delta)
 }

@@ -599,6 +599,15 @@ var DynamicSettings = [...]*protos.DynamicSetting{
 		TargetForSetting: protos.DynconfTarget_ALL,
 	},
 	{
+		Name: "PEERDB_PG_DDL_CAPTURE",
+		Description: "Install event triggers on the Postgres source that send schema changes in the replication stream, " +
+			"so PG type system mirrors apply them at their exact position. Needs a role that can create event triggers",
+		DefaultValue:     "false",
+		ValueType:        protos.DynconfValueType_BOOL,
+		ApplyMode:        protos.DynconfApplyMode_APPLY_MODE_AFTER_RESUME,
+		TargetForSetting: protos.DynconfTarget_POSTGRES,
+	},
+	{
 		Name: "PEERDB_POSTGRES_RAW_BATCH_CLEANUP_THRESHOLD",
 		Description: "Number of normalized batches to retain in raw table. After normalize, batches older " +
 			"than normalize_batch_id minus this value are deleted. 0 disables cleanup",
@@ -1144,6 +1153,10 @@ func PeerDBMongoDBExcludedOperationTypes(ctx context.Context, env map[string]str
 
 func PeerDBMongoDBSampledObjectIDPartitioning(ctx context.Context, env map[string]string) (bool, error) {
 	return dynamicConfBool(ctx, env, "PEERDB_MONGODB_SAMPLED_OBJECTID_PARTITIONING")
+}
+
+func PeerDBPostgresDDLCapture(ctx context.Context, env map[string]string) (bool, error) {
+	return dynamicConfBool(ctx, env, "PEERDB_PG_DDL_CAPTURE")
 }
 
 func PeerDBPostgresRawBatchCleanupThreshold(ctx context.Context, env map[string]string) (int64, error) {

@@ -77,6 +77,7 @@ type PostgresCDCSource struct {
 	flags                                    []string
 	nativeJSONEnabled                        bool
 	warnedTypeChanges                        sync.Map
+	ddlCapture                               bool
 }
 
 type PostgresCDCConfig struct {
@@ -169,6 +170,13 @@ func (c *PostgresConnector) NewPostgresCDCSource(ctx context.Context, cdcConfig 
 
 	jsonApi := createExtendedJSONUnmarshaler()
 
+	var ddlCapture bool
+	if err := c.conn.QueryRow(ctx,
+		"SELECT EXISTS(SELECT FROM pg_event_trigger WHERE evtname = 'peerdb_ddl_end' AND evtenabled <> 'D')",
+	).Scan(&ddlCapture); err != nil {
+		return nil, fmt.Errorf("error checking DDL capture: %w", err)
+	}
+
 	return &PostgresCDCSource{
 		PostgresConnector:                        c,
 		srcTableIDNameMapping:                    cdcConfig.SrcTableIDNameMapping,
@@ -196,6 +204,7 @@ func (c *PostgresConnector) NewPostgresCDCSource(ctx context.Context, cdcConfig 
 		internalVersion:                          cdcConfig.InternalVersion,
 		flags:                                    cdcConfig.Flags,
 		nativeJSONEnabled:                        cdcConfig.NativeJSONEnabled,
+		ddlCapture:                               ddlCapture,
 	}, nil
 }
 
@@ -1034,7 +1043,9 @@ func PullCdcRecords[Items model.Items](
 					case *model.RelationRecord[Items]:
 						tableSchemaDelta := r.TableSchemaDelta
 						if tableSchemaDelta.NewSchema != nil {
-							records.AddSchemaDelta(req.TableNameMapping, tableSchemaDelta)
+							if tableSchemaDelta.DstTableName != "" {
+								records.AddSchemaDelta(req.TableNameMapping, tableSchemaDelta)
+							}
 							if err := addRecordWithKey(model.TableWithPkey{}, rec); err != nil {
 								return err
 							}
@@ -1183,6 +1194,8 @@ func processMessage[Items model.Items](
 			slog.String("LSN", msg.LSN.String()))
 		if !msg.Transactional {
 			batch.UpdateLatestCheckpointID(int64(msg.LSN))
+		} else if msg.Prefix == ddlMessagePrefix {
+			return processDDLMessage[Items](ctx, p, msg)
 		}
 		return &model.MessageRecord[Items]{
 			BaseRecord: p.baseRecord(msg.LSN),

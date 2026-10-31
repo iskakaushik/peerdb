@@ -218,3 +218,58 @@ func sortedMap(m map[string]string) func(func(string, string) bool) {
 		}
 	}
 }
+
+type typeDef struct {
+	Base   *string           `json:"base"`
+	Checks map[string]string `json:"checks"`
+	Name   string            `json:"name"`
+	Kind   string            `json:"kind"`
+	Labels []string          `json:"labels"`
+	Attrs  []string          `json:"attrs"`
+}
+
+func planType(def, cur *typeDef) []ddlStep {
+	lit := utils.QuoteLiteral
+	var steps []ddlStep
+	add := func(strict bool, format string, args ...any) {
+		steps = append(steps, ddlStep{SQL: fmt.Sprintf(format, args...), Strict: strict})
+	}
+	if cur == nil {
+		labels := make([]string, 0, len(def.Labels))
+		for _, l := range def.Labels {
+			labels = append(labels, lit(l))
+		}
+		args := map[string]string{"e": strings.Join(labels, ", "), "d": deref(def.Base), "c": strings.Join(def.Attrs, ", ")}
+		add(true, map[string]string{"e": "CREATE TYPE %s AS ENUM (%s)", "d": "CREATE DOMAIN %s AS %s", "c": "CREATE TYPE %s AS (%s)"}[def.Kind],
+			def.Name, args[def.Kind])
+		cur = &typeDef{}
+	}
+	if def.Kind == "e" && len(def.Labels) == len(cur.Labels) {
+		for i, l := range cur.Labels {
+			if l != def.Labels[i] {
+				add(true, "ALTER TYPE %s RENAME VALUE %s TO %s", def.Name, lit(l), lit(def.Labels[i]))
+			}
+		}
+	} else if def.Kind == "e" && len(cur.Labels) > 0 {
+		for i, l := range def.Labels {
+			if !slices.Contains(cur.Labels, l) {
+				pos := " BEFORE " + lit(cur.Labels[0])
+				if i > 0 {
+					pos = " AFTER " + lit(def.Labels[i-1])
+				}
+				add(true, "ALTER TYPE %s ADD VALUE IF NOT EXISTS %s%s", def.Name, lit(l), pos)
+			}
+		}
+	}
+	for name := range sortedMap(cur.Checks) {
+		if _, ok := def.Checks[name]; !ok {
+			add(true, "ALTER DOMAIN %s DROP CONSTRAINT %s", def.Name, common.QuoteIdentifier(name))
+		}
+	}
+	for name, check := range sortedMap(def.Checks) {
+		if _, ok := cur.Checks[name]; !ok {
+			add(false, "ALTER DOMAIN %s ADD CONSTRAINT %s %s", def.Name, common.QuoteIdentifier(name), check)
+		}
+	}
+	return steps
+}

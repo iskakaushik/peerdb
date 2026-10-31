@@ -172,3 +172,21 @@ func TestPlanTableDestinationRenamedFirst(t *testing.T) {
 	cur := tdef("public.t", col(1, "id", "integer"), col(2, "c2", "integer"))
 	require.Empty(t, planTable(def, cur, prev, nil))
 }
+
+func TestPlanType(t *testing.T) {
+	enum := &typeDef{Name: "public.mood", Kind: "e", Labels: []string{"a", "b", "c"}}
+	require.Equal(t, []string{"CREATE TYPE public.mood AS ENUM ('a', 'b', 'c')"}, sqls(planType(enum, nil)))
+	require.Equal(t, []string{"ALTER TYPE public.mood ADD VALUE IF NOT EXISTS 'c' AFTER 'b'"},
+		sqls(planType(enum, &typeDef{Kind: "e", Labels: []string{"a", "b"}})))
+	require.Equal(t, []string{"ALTER TYPE public.mood RENAME VALUE 'x' TO 'a'"},
+		sqls(planType(enum, &typeDef{Kind: "e", Labels: []string{"x", "b", "c"}})))
+	dom := &typeDef{Name: "public.posint", Kind: "d", Base: strp("integer"), Checks: map[string]string{"lt100": "CHECK ((VALUE < 100))"}}
+	require.Equal(t, []string{
+		"ALTER DOMAIN public.posint DROP CONSTRAINT \"posint_check\"",
+		"ALTER DOMAIN public.posint ADD CONSTRAINT \"lt100\" CHECK ((VALUE < 100))",
+	}, sqls(planType(dom, &typeDef{Kind: "d", Checks: map[string]string{"posint_check": "CHECK ((VALUE > 0))"}})))
+	require.Equal(t, []string{
+		"CREATE DOMAIN public.posint AS integer",
+		"ALTER DOMAIN public.posint ADD CONSTRAINT \"lt100\" CHECK ((VALUE < 100))",
+	}, sqls(planType(dom, nil)))
+}

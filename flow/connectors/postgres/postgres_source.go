@@ -343,6 +343,7 @@ func pullCore[Items model.Items](
 		return fmt.Errorf("failed to read PEERDB_CLICKHOUSE_ENABLE_JSON: %w", err)
 	}
 
+	c.installDDLCapture(ctx, req.Env)
 	cdc, err := c.NewPostgresCDCSource(ctx, &PostgresCDCConfig{
 		CatalogPool:                              catalogPool,
 		OtelManager:                              otelManager,

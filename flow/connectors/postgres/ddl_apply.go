@@ -2,10 +2,12 @@ package connpostgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -44,7 +46,9 @@ func (c *PostgresConnector) pendingSchemaChanges(
 		if err := protojson.Unmarshal([]byte(data), delta); err != nil {
 			return err
 		}
-		schemas[delta.DstTableName] = delta.PrevSchema
+		if delta.DstTableName != "" {
+			schemas[delta.DstTableName] = delta.PrevSchema
+		}
 		pending[batchID] = append([]*protos.TableSchemaDelta{delta}, pending[batchID]...)
 		return nil
 	}); err != nil {
@@ -61,7 +65,9 @@ func (c *PostgresConnector) applySchemaChanges(
 		if err := c.applySchemaChange(ctx, req, batchID, delta); err != nil {
 			return err
 		}
-		schemas[delta.DstTableName] = delta.NewSchema
+		if delta.DstTableName != "" {
+			schemas[delta.DstTableName] = delta.NewSchema
+		}
 	}
 	return nil
 }
@@ -76,6 +82,12 @@ func (c *PostgresConnector) applySchemaChange(
 	defer shared.RollbackTx(tx, c.logger)
 	if _, err := tx.Exec(ctx, fmt.Sprintf(schemaChangeSetupSQL, c.metadataSchema)); err != nil {
 		return err
+	}
+	if delta.DstTableName == "" {
+		if err := c.applyObjectChange(ctx, tx, req.FlowJobName, batchID, delta.NewSchema.Definition); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	dst, err := common.ParseTableIdentifier(delta.DstTableName)
 	if err != nil {
@@ -170,4 +182,35 @@ func (c *PostgresConnector) execSchemaStep(
 	_, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.peerdb_ddl_log(mirror_job_name, batch_id, table_name, stmt, error)
 		VALUES ($1, $2, $3, $4, $5)`, c.metadataSchema), flowJobName, batchID, table, step.SQL, errText)
 	return err
+}
+
+func (c *PostgresConnector) applyObjectChange(ctx context.Context, tx pgx.Tx, flowJobName string, batchID int64, definition string) error {
+	var obj struct {
+		Type *typeDef `json:"type"`
+		SQL  string   `json:"sql"`
+	}
+	if err := json.Unmarshal([]byte(definition), &obj); err != nil {
+		return err
+	}
+	steps := []ddlStep{{SQL: obj.SQL}}
+	if obj.Type != nil {
+		var curJSON *string
+		curSQL := "SELECT (" + strings.Replace(typeDefSQL, "$1", "to_regtype($1)", 1) + ")"
+		if err := tx.QueryRow(ctx, curSQL, obj.Type.Name).Scan(&curJSON); err != nil {
+			return err
+		}
+		var cur *typeDef
+		if curJSON != nil {
+			if err := json.Unmarshal([]byte(*curJSON), &cur); err != nil {
+				return err
+			}
+		}
+		steps = planType(obj.Type, cur)
+	}
+	for _, step := range steps {
+		if err := c.execSchemaStep(ctx, tx, flowJobName, batchID, "", step); err != nil {
+			return err
+		}
+	}
+	return nil
 }
