@@ -30,6 +30,7 @@ type normalizeStmtGenerator struct {
 	metadataSchema string
 	// Postgres version 15 introduced MERGE, fallback statements before that
 	supportsMerge bool
+	dst           map[string]dstTable
 }
 
 func (n *normalizeStmtGenerator) columnTypeToPg(schema *protos.TableSchema, column *protos.FieldDescription) string {
@@ -112,8 +113,7 @@ func (n *normalizeStmtGenerator) generateFallbackStatements(
 
 	insertColumnsSQL := strings.Join(columnNames, ",")
 	updateColumnsSQLArray := make([]string, 0, columnCount)
-	for _, column := range normalizedTableSchema.Columns {
-		quotedCol := common.QuoteIdentifier(column.Name)
+	for _, quotedCol := range shared.ArrayMinus(columnNames, n.dst[dstTableName].identity) {
 		updateColumnsSQLArray = append(updateColumnsSQLArray, fmt.Sprintf(`%s=EXCLUDED.%s`, quotedCol, quotedCol))
 	}
 	updateColumnsSQL := strings.Join(updateColumnsSQLArray, ",")
@@ -207,7 +207,8 @@ func (n *normalizeStmtGenerator) generateMergeStatement(
 		insertValuesSQLArray = append(insertValuesSQLArray, "src."+quotedCol)
 	}
 
-	updateStatementsforToastCols := n.generateUpdateStatements(quotedColumnNames, unchangedToastColumns)
+	updateStatementsforToastCols := n.generateUpdateStatements(
+		shared.ArrayMinus(quotedColumnNames, n.dst[dstTableName].identity), unchangedToastColumns)
 	// append synced_at column
 	if n.peerdbCols.SyncedAtColName != "" {
 		quotedColumnNames = append(quotedColumnNames, common.QuoteIdentifier(n.peerdbCols.SyncedAtColName))
@@ -222,7 +223,7 @@ func (n *normalizeStmtGenerator) generateMergeStatement(
 		softDeleteInsertValuesSQL := strings.Join(append(insertValuesSQLArray, "TRUE"), ",")
 
 		updateStatementsforToastCols = append(updateStatementsforToastCols,
-			fmt.Sprintf("WHEN NOT MATCHED AND (src._peerdb_record_type=2) THEN INSERT (%s) VALUES(%s)",
+			fmt.Sprintf("WHEN NOT MATCHED AND (src._peerdb_record_type=2) THEN INSERT (%s) OVERRIDING SYSTEM VALUE VALUES(%s)",
 				softDeleteInsertColumnsSQL, softDeleteInsertValuesSQL))
 	}
 	updateStringToastCols := strings.Join(updateStatementsforToastCols, "\n")

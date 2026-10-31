@@ -350,3 +350,28 @@ func TestGenerateNormalizeStatements_Merge(t *testing.T) {
 	require.Contains(t, stmts[0], "jsonb_to_record")
 	require.Contains(t, stmts[0], "MERGE INTO")
 }
+
+func TestGenerateMergeStatement_IdentityAlways(t *testing.T) {
+	schema := buildTableSchema([]*protos.FieldDescription{
+		{Name: "id", Type: "integer"},
+		{Name: "seq", Type: "integer"},
+		{Name: "v", Type: "text"},
+	}, []string{"id"})
+	gen := normalizeStmtGenerator{
+		rawTableName:       "_peerdb_raw_test",
+		tableSchemaMapping: map[string]*protos.TableSchema{"public.t": schema},
+		peerdbCols:         &protos.PeerDBColumns{},
+		metadataSchema:     "_peerdb_internal",
+		supportsMerge:      true,
+		dst:                map[string]dstTable{"public.t": {identity: []string{`"id"`, `"seq"`}}},
+	}
+	merge := normalizeSQL(gen.generateMergeStatement("public.t", schema, []string{""}))
+	require.Contains(t, merge, normalizeSQL(`INSERT ("id","seq","v") OVERRIDING SYSTEM VALUE VALUES (src."id",src."seq",src."v")`))
+	require.Contains(t, merge, normalizeSQL(`THEN UPDATE SET "v"=src."v"`))
+	require.NotContains(t, merge, normalizeSQL(`"seq"=src."seq"`))
+
+	gen.supportsMerge = false
+	upsert := normalizeSQL(gen.generateFallbackStatements("public.t", schema)[0])
+	require.Contains(t, upsert, normalizeSQL(`OVERRIDING SYSTEM VALUE SELECT`))
+	require.Contains(t, upsert, normalizeSQL(`DO UPDATE SET "v"=EXCLUDED."v"`))
+}
