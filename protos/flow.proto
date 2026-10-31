@@ -326,6 +326,7 @@ message TableSchema {
   bool nullable_enabled = 5;
   repeated FieldDescription columns = 6;
   uint32 table_oid = 7;
+  string definition = 8;
 }
 
 message FieldDescription {
@@ -335,6 +336,7 @@ message FieldDescription {
   bool nullable = 4;
   string type_schema_name = 5;
   optional string default_expr = 6;
+  int32 attnum = 7;
 }
 
 message SetupTableSchemaBatchInput {
@@ -575,6 +577,8 @@ message TableSchemaDelta {
   repeated FieldDescription added_columns = 3;
   TypeSystem system = 4;
   bool nullable_enabled = 5;
+  TableSchema prev_schema = 6;
+  TableSchema new_schema = 7;
 }
 
 message QRepFlowState {

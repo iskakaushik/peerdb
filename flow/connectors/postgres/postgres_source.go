@@ -663,6 +663,7 @@ func (c *PostgresConnector) getTableSchemaForTable(
 			TypeModifier:   fieldDescription.TypeModifier,
 			Nullable:       nullable,
 			TypeSchemaName: typeSchemaNameMapping[fieldDescription.DataTypeOID],
+			Attnum:         int32(fieldDescription.TableAttributeNumber),
 		})
 	}
 
