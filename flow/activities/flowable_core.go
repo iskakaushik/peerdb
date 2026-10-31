@@ -395,11 +395,18 @@ func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDC
 		}
 		firstRowReceivedAt, firstRowCommitTime = &receivedAt, &commitTime
 	}
-	if err := monitoring.UpdateNumRowsAndEndLSNForCDCBatch(
-		ctx, a.CatalogPool, flowName, syncBatchID, uint32(res.NumRecordsSynced), lastCheckpoint,
-		firstRowReceivedAt, firstRowCommitTime,
-	); err != nil {
-		return nil, a.Alerter.LogFlowError(ctx, flowName, err)
+	for attempt := 0; ; attempt++ {
+		err := monitoring.UpdateNumRowsAndEndLSNForCDCBatch(
+			ctx, a.CatalogPool, flowName, syncBatchID, uint32(res.NumRecordsSynced), lastCheckpoint,
+			firstRowReceivedAt, firstRowCommitTime,
+		)
+		if err == nil {
+			break
+		} else if attempt == 60 || ctx.Err() != nil {
+			return nil, a.Alerter.LogFlowError(ctx, flowName, err)
+		}
+		logger.Warn("retrying batch bookkeeping after the destination commit", slog.Any("error", err))
+		time.Sleep(5 * time.Second)
 	}
 
 	if err := monitoring.UpdateLatestLSNAtTargetForCDCFlow(ctx, a.CatalogPool, flowName, lastCheckpoint.ID); err != nil {
