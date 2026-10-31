@@ -302,15 +302,15 @@ func (h *FlowRequestHandler) CDCLagGraph(ctx context.Context, req *protos.GraphR
 	rows, err := h.pool.Query(ctx, `
 		SELECT tm,
 			MAX(EXTRACT(EPOCH FROM first_row_received_at - first_row_commit_time) * 1000)::float8,
-			MAX(EXTRACT(EPOCH FROM end_time - first_row_received_at) * 1000)::float8,
-			MAX(EXTRACT(EPOCH FROM end_time - first_row_commit_time) * 1000)::float8
+			MAX(EXTRACT(EPOCH FROM LEAST(COALESCE(end_time, now()), tm + $1::INTERVAL) - first_row_received_at) * 1000)::float8,
+			MAX(EXTRACT(EPOCH FROM LEAST(COALESCE(end_time, now()), tm + $1::INTERVAL) - first_row_commit_time) * 1000)::float8
 		FROM generate_series(
 			date_trunc($2, now() - $1::INTERVAL * $3),
 			now(),
 			$1::INTERVAL
 		) tm
 		LEFT JOIN peerdb_stats.cdc_batches
-			ON end_time >= tm AND end_time < tm + $1::INTERVAL
+			ON (end_time >= tm OR end_time IS NULL) AND first_row_received_at < tm + $1::INTERVAL
 			AND flow_name = $4
 			AND first_row_received_at IS NOT NULL
 		GROUP BY 1
