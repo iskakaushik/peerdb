@@ -118,6 +118,19 @@ func TestPlanTableConstraintsAndIndexes(t *testing.T) {
 	}, sqls(planTable(def, cur, prev, nil)))
 }
 
+func TestPlanTableKeepsNotValidConstraint(t *testing.T) {
+	def := tdef("public.t", col(1, "id", "integer"))
+	def.Constraints["t_fk"] = "FOREIGN KEY (id) REFERENCES public.p(id)"
+	cur := tdef("public.t", col(1, "id", "integer"))
+	cur.Constraints["t_fk"] = "FOREIGN KEY (id) REFERENCES public.p(id) NOT VALID"
+	require.Empty(t, planTable(def, cur, def, nil))
+	def.Constraints["t_fk"] = "FOREIGN KEY (id) REFERENCES public.p(id) ON DELETE CASCADE"
+	require.Equal(t, []string{
+		`ALTER TABLE public.t DROP CONSTRAINT IF EXISTS "t_fk"`,
+		`ALTER TABLE public.t ADD CONSTRAINT "t_fk" FOREIGN KEY (id) REFERENCES public.p(id) ON DELETE CASCADE`,
+	}, sqls(planTable(def, cur, def, nil)))
+}
+
 func TestPlanTableUnknownPrevDropsUniqueOnly(t *testing.T) {
 	def := tdef("public.t", col(1, "id", "integer"))
 	cur := tdef("public.t", col(1, "id", "integer"))

@@ -345,6 +345,7 @@ func (c *PostgresConnector) NormalizeRecords(
 		)
 	}
 	c.logger.Info(fmt.Sprintf("normalized %d records", totalRowsAffected))
+	c.revalidateConstraints(ctx, req.FlowJobName)
 
 	c.cleanupOldRawBatches(ctx, req.Env, rawTableIdentifier, req.SyncBatchID)
 

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -70,6 +71,24 @@ func (c *PostgresConnector) applySchemaChanges(
 		}
 	}
 	return nil
+}
+
+func (c *PostgresConnector) revalidateConstraints(ctx context.Context, flowJobName string) {
+	rows, err := c.conn.Query(ctx, fmt.Sprintf(`SELECT format('ALTER TABLE %%s VALIDATE CONSTRAINT %%I', k.conrelid::regclass, k.conname)
+		FROM %s.peerdb_ddl_state s JOIN pg_constraint k
+		ON k.conrelid = to_regclass(format('%%I.%%I', split_part(s.table_name, '.', 1), split_part(s.table_name, '.', 2)))
+		WHERE s.mirror_job_name = $1 AND NOT k.convalidated AND s.definition->'cons'->>k.conname NOT LIKE '%% NOT VALID'`,
+		c.metadataSchema), flowJobName)
+	var stmts []string
+	if err == nil {
+		stmts, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	}
+	if err != nil && !shared.IsSQLStateError(err, pgerrcode.UndefinedTable) {
+		c.logger.Warn("failed to find constraints to validate", slog.Any("error", err))
+	}
+	for _, note := range execAll(ctx, c.conn, stmts) {
+		c.logger.Warn("constraint not validated", slog.String("error", note))
+	}
 }
 
 func (c *PostgresConnector) applySchemaChange(

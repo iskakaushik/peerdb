@@ -25,7 +25,7 @@ func planTable(def, cur, prev *TableDef, exclude map[string]struct{}) []ddlStep 
 	unknown := func(m map[string]string, k string) bool { _, ok := m[k]; return m == nil || ok }
 
 	for name, curDef := range sortedMap(cur.Constraints) {
-		if srcDef, ok := def.Constraints[name]; ok && sameDef(srcDef, curDef) || !ok && !unknown(prev.Constraints, name) {
+		if srcDef, ok := def.Constraints[name]; ok && sameConstraint(srcDef, curDef) || !ok && !unknown(prev.Constraints, name) {
 			continue
 		}
 		drops = append(drops, ddlStep{SQL: alter("DROP CONSTRAINT IF EXISTS %s", q(name)), Strict: true})
@@ -118,7 +118,7 @@ func planTable(def, cur, prev *TableDef, exclude map[string]struct{}) []ddlStep 
 	}
 
 	for name, srcDef := range sortedMap(def.Constraints) {
-		if curDef, ok := cur.Constraints[name]; !ok || !sameDef(srcDef, curDef) {
+		if curDef, ok := cur.Constraints[name]; !ok || !sameConstraint(srcDef, curDef) {
 			tighten = append(tighten, ddlStep{SQL: alter("ADD CONSTRAINT %s %s", q(name), srcDef)})
 		}
 	}
@@ -197,6 +197,8 @@ func onTable(indexDef, src, dst string) string {
 }
 
 func isUnique(indexDef string) bool { return strings.HasPrefix(indexDef, "CREATE UNIQUE ") }
+
+func sameConstraint(src, cur string) bool { return sameDef(src, cur) || sameDef(src+" NOT VALID", cur) }
 
 func sameDef(a, b string) bool {
 	return strings.Join(strings.Fields(a), " ") == strings.Join(strings.Fields(b), " ")
