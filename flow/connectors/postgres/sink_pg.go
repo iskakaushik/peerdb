@@ -24,6 +24,7 @@ import (
 type PgCopyShared struct {
 	schemaLatch *concurrency.Latch[[]string]
 	err         error
+	types       []string
 	recopy      bool
 }
 
@@ -93,7 +94,7 @@ func (p PgCopyWriter) ExecuteQueryWithTx(
 	}
 	if qe.snapshot != "" && len(fieldDescriptions) > 0 && fieldDescriptions[0].TableOID != 0 {
 		var err error
-		if query, cols, p.schema.recopy, err = snapshotColumns(ctx, tx, query, fieldDescriptions); err != nil {
+		if query, cols, err = snapshotColumns(ctx, tx, query, fieldDescriptions, p.schema); err != nil {
 			return 0, 0, err
 		} else if p.schema.recopy {
 			shared.RollbackTx(tx, qe.logger)
@@ -151,6 +152,25 @@ func (p PgCopyReader) CopyInto(ctx context.Context, c *PostgresConnector, tx pgx
 	for _, col := range cols {
 		quotedCols = append(quotedCols, common.QuoteIdentifier(col))
 	}
+	if len(p.schema.types) == len(cols) && len(cols) > 0 {
+		rows, err := tx.Query(ctx, `SELECT attname FROM pg_catalog.pg_attribute
+			WHERE attrelid = $1::text::regclass AND attnum > 0 AND NOT attisdropped`, table.Sanitize())
+		if err != nil {
+			return 0, err
+		}
+		have, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return 0, err
+		}
+		for i, col := range cols {
+			if !slices.Contains(have, col) {
+				if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s",
+					table.Sanitize(), common.QuoteIdentifier(col), p.schema.types[i])); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
 	if p.schema.recopy {
 		recopy := fmt.Sprintf("LOCK TABLE %[1]s IN SHARE ROW EXCLUSIVE MODE; DELETE FROM %[1]s", table.Sanitize())
 		if _, err := tx.Exec(ctx, recopy); err != nil {
@@ -170,38 +190,40 @@ const rewrittenSQL = `SELECT coalesce(bool_or(c.relfilenode <> pg_relation_filen
  FROM pg_catalog.pg_class c WHERE c.oid = $1::oid OR c.oid IN (SELECT relid FROM pg_catalog.pg_partition_tree($1::oid))`
 
 func snapshotColumns(
-	ctx context.Context, tx pgx.Tx, query string, fields []pgconn.FieldDescription,
-) (string, []string, bool, error) {
+	ctx context.Context, tx pgx.Tx, query string, fields []pgconn.FieldDescription, shared *PgCopyShared,
+) (string, []string, error) {
 	var rewritten, standalone bool
 	var table string
 	if err := tx.QueryRow(ctx, rewrittenSQL, fields[0].TableOID).Scan(
 		&rewritten, &table, &standalone); err != nil {
-		return "", nil, false, err
+		return "", nil, err
 	} else if rewritten && !standalone {
-		return "", nil, false, temporal.NewNonRetryableApplicationError("table "+table+" was rewritten during the initial load",
+		return "", nil, temporal.NewNonRetryableApplicationError("table "+table+" was rewritten during the initial load",
 			exceptions.ApplicationErrorTypeIrrecoverableInvalidSnapshot.String(), nil)
 	} else if !rewritten {
 		table = "(" + query + ") _peerdb_snapshot"
 	}
-	rows, err := tx.Query(ctx, `SELECT attnum, attname FROM pg_catalog.pg_attribute
+	rows, err := tx.Query(ctx, `SELECT attnum, attname, format_type(atttypid, atttypmod) FROM pg_catalog.pg_attribute
 		WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped AND attgenerated = ''`, fields[0].TableOID)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, err
 	}
-	names := make(map[uint16]string)
+	names := make(map[uint16][2]string)
 	var num uint16
-	var name string
-	if _, err := pgx.ForEachRow(rows, []any{&num, &name}, func() error {
-		names[num] = name
+	var name, typ string
+	if _, err := pgx.ForEachRow(rows, []any{&num, &name, &typ}, func() error {
+		names[num] = [2]string{name, typ}
 		return nil
 	}); err != nil {
-		return "", nil, false, err
+		return "", nil, err
 	}
 	sel, cols := make([]string, 0, len(fields)), make([]string, 0, len(fields))
+	shared.types, shared.recopy = make([]string, 0, len(fields)), rewritten
 	for _, fd := range fields {
-		if name, ok := names[fd.TableAttributeNumber]; ok {
-			sel, cols = append(sel, common.QuoteIdentifier(fd.Name)+" AS "+common.QuoteIdentifier(name)), append(cols, name)
+		if col, ok := names[fd.TableAttributeNumber]; ok {
+			sel, cols = append(sel, common.QuoteIdentifier(fd.Name)+" AS "+common.QuoteIdentifier(col[0])), append(cols, col[0])
+			shared.types = append(shared.types, col[1])
 		}
 	}
-	return "SELECT " + strings.Join(sel, ",") + " FROM " + table, cols, rewritten, nil
+	return "SELECT " + strings.Join(sel, ",") + " FROM " + table, cols, nil
 }
